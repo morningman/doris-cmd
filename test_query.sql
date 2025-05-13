@@ -1,0 +1,4 @@
+SHOW DATABASES;
+USE test;
+SHOW TABLES;
+SELECT 1 AS test_col;

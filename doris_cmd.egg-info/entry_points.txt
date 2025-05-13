@@ -1,0 +1,2 @@
+[console_scripts]
+doris-cmd = doris_cmd.main:main
