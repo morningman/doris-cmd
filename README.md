@@ -11,6 +11,7 @@ A command line tool for connecting to and operating Doris database.
   - Show query runtime
 - Display query ID and total runtime with results
 - Support query cancellation (Ctrl+C) and program exit (Ctrl+D)
+- Run benchmark on SQL queries and measure performance
 
 ## Installation
 
@@ -35,6 +36,8 @@ Parameters:
 - `--database`: Default database (optional)
 - `--execute`, `-e`: Execute query and exit
 - `--file`, `-f`: Execute query from file and exit
+- `--benchmark`: Run benchmark on SQL queries from a file or directory
+- `--times`: Number of times to run each query in benchmark mode (default: 1)
 
 ### Special Commands in Interactive Mode
 
@@ -61,6 +64,61 @@ During query execution, doris-cmd will display the following real-time progress 
 - Data volume: Size of processed data
 - CPU time: CPU time used by the query
 - Memory usage: Memory amount used by the query
+
+## Benchmark Mode
+
+The benchmark mode allows you to measure the performance of SQL queries:
+
+```bash
+# Benchmark a single file with multiple SQL statements
+doris-cmd --host <host> --port <port> --benchmark "queries.sql" --times 3
+
+# Benchmark all .sql files in a directory (each file = one SQL statement)
+doris-cmd --host <host> --port <port> --benchmark "sql_queries_dir/" --times 3
+```
+
+This command will:
+1. Execute each SQL query the specified number of times
+2. Show progress indicators during execution
+3. Display comprehensive statistical results at the end
+
+When using a directory, each .sql file is treated as a single SQL query. This is ideal for organizing complex queries into separate files.
+
+The benchmark results include three tables:
+
+1. **Query Execution Times**: Shows each query's execution time for each run, plus min/max/avg statistics
+   ```
+   ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+   ┃ Query # ┃ Source     ┃ Run 1   ┃ Run 2   ┃ Run 3   ┃ Min    ┃ Max    ┃ Avg    ┃
+   ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+   │ Query 1 │ query1.sql │ 1.2345  │ 1.1234  │ 1.3456  │ 1.1234 │ 1.3456 │ 1.2345 │
+   │ Query 2 │ query2.sql │ 0.5678  │ 0.4567  │ 0.6789  │ 0.4567 │ 0.6789 │ 0.5678 │
+   │ Average │            │ 0.9012  │ 0.7901  │ 1.0123  │        │        │        │
+   │ P50     │            │ 0.9012  │ 0.7901  │ 1.0123  │        │        │        │
+   │ P95     │            │ 1.2345  │ 1.1234  │ 1.3456  │        │        │        │
+   └─────────┴────────────┴─────────┴─────────┴─────────┴────────┴────────┴────────┘
+   ```
+
+2. **Overall Statistics**: Simple summary of the benchmark run
+   ```
+   ┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+   ┃ Metric          ┃ Value          ┃
+   ┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+   │ Total Runtime   │ 5.67 seconds   │
+   │ Number of Queries │ 2            │
+   │ Total Executions │ 6             │
+   └─────────────────┴────────────────┘
+   ```
+
+3. **SQL Queries**: Lists all benchmarked queries for reference
+   ```
+   ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+   ┃ Query # ┃ Source     ┃ SQL                                                     ┃
+   ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+   │ Query 1 │ query1.sql │ SELECT * FROM my_table WHERE id > 1000                  │
+   │ Query 2 │ query2.sql │ SELECT COUNT(*) FROM my_other_table                     │
+   └─────────┴────────────┴─────────────────────────────────────────────────────────┘
+   ```
 
 ## Development
 

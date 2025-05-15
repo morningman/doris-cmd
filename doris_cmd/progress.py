@@ -41,6 +41,7 @@ class ProgressTracker:
         self.start_time = None
         self.total_runtime = 0
         self.progress_tracking_started = False
+        self.silent_mode = False
         
         # Authentication parameters
         self.auth_user = auth_user
@@ -53,19 +54,27 @@ class ProgressTracker:
         self.mock_scan_bytes = 0
         self.mock_start_time = None
         
-    def start_tracking(self):
-        """Start tracking query progress in a separate thread."""
+    def start_tracking(self, silent=False):
+        """Start tracking query progress in a separate thread.
+        
+        Args:
+            silent (bool): If True, progress will not be displayed to the console
+        """
         if self.tracking:
             return
             
         # Record start time
         self.start_time = time.time()
         
+        # Set silent mode
+        self.silent_mode = silent
+            
         # Try to get HTTP port if not set and connection is available
         if not self.mock_mode and self.port is None and self.connection is not None:
             self.port = self.connection.get_http_port()
             if self.port is None and not self.mock_mode:
-                print("\rWarning: Could not determine HTTP port. Using mock mode for progress tracking.")
+                if not self.silent_mode:
+                    print("\rWarning: Could not determine HTTP port. Using mock mode for progress tracking.")
                 self.mock_mode = True
         
         # In mock mode, initialize mock data
@@ -91,8 +100,8 @@ class ProgressTracker:
         if self.start_time:
             self.total_runtime = time.time() - self.start_time
             
-        # In mock mode, display final progress data
-        if self.mock_mode:
+        # In mock mode, display final progress data (only if not in silent mode)
+        if self.mock_mode and not self.silent_mode:
             progress = self._fetch_progress_mock(final=True)
             if progress:
                 self.progress_data = progress
@@ -143,10 +152,12 @@ class ProgressTracker:
                             self.port = self.connection.get_http_port()
                             if self.port is None:
                                 # If still can't get the port, use mock mode
-                                print("\rInfo: Using mock data for progress tracking")
+                                if not self.silent_mode:
+                                    print("\rInfo: Using mock data for progress tracking")
                                 self.mock_mode = True
                         else:
-                            print("\rInfo: Using mock data for progress tracking")
+                            if not self.silent_mode:
+                                print("\rInfo: Using mock data for progress tracking")
                             self.mock_mode = True
                     
                 # Get progress data
@@ -180,25 +191,32 @@ class ProgressTracker:
                     if self.last_error:
                         self.progress_data['error'] = self.last_error
                         
-                # Always display the progress since we already waited 2 seconds
-                self._display_progress()
+                # Display the progress (if not in silent mode)
+                if not self.silent_mode:
+                    self._display_progress()
             except Exception as e:
                 # Only print errors occasionally to avoid cluttering the terminal
-                current_time = time.time()
-                if current_time - self.last_print_time > 5.0:
-                    print(f"\rProgress tracking error: {e}", end="")
-                    self.last_print_time = current_time
+                if not self.silent_mode:
+                    current_time = time.time()
+                    if current_time - self.last_print_time > 5.0:
+                        print(f"\rProgress tracking error: {e}", end="")
+                        self.last_print_time = current_time
+                        self.last_error = str(e)
+                        
+                        # Always add current runtime to progress data even when exceptions occur
+                        if self.start_time and self.progress_data:
+                            runtime_ms = int((time.time() - self.start_time) * 1000)
+                            self.progress_data['runtime_ms'] = runtime_ms
+                            self._display_progress()
+                else:
+                    # In silent mode, just record the error but don't print anything
                     self.last_error = str(e)
-                    
-                    # Always add current runtime to progress data even when exceptions occur
                     if self.start_time and self.progress_data:
                         runtime_ms = int((time.time() - self.start_time) * 1000)
                         self.progress_data['runtime_ms'] = runtime_ms
-                        self._display_progress()
                 
-            # Sleep for 1 second between progress checks - this is fine as we're already
-            # running queries that took >2 seconds so 1s interval is reasonable
-            time.sleep(1)
+            # Sleep for 1 second between progress checks
+            time.sleep(1.0)
             
     def _fetch_progress_mock(self, final=False):
         """Generate mock progress data for testing.
@@ -326,6 +344,10 @@ class ProgressTracker:
             
     def _display_progress(self):
         """Display current progress information."""
+        # Don't display anything in silent mode
+        if self.silent_mode:
+            return
+            
         # Always calculate runtime
         runtime_ms = 0
         if self.start_time:
