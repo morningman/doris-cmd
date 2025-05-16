@@ -17,6 +17,7 @@ from pygments.lexers.sql import SqlLexer
 from rich.console import Console
 from rich.table import Table
 from rich.style import Style as RichStyle
+import csv
 
 from doris_cmd.connection import DorisConnection
 from doris_cmd.progress import ProgressTracker
@@ -30,7 +31,7 @@ def get_history_file():
     return os.path.join(history_dir, "history")
 
 
-def display_results(column_names, results, query_id=None, runtime=None):
+def display_results(column_names, results, query_id=None, runtime=None, output_file=None, append_csv=False):
     """Display query results in tabular format using rich.
     
     Args:
@@ -38,6 +39,8 @@ def display_results(column_names, results, query_id=None, runtime=None):
         results (list): List of dictionaries containing results
         query_id (str, optional): The query ID associated with this result
         runtime (float, optional): Query runtime in seconds
+        output_file (str, optional): Path to output CSV file
+        append_csv (bool): Whether to append to the CSV file if it exists
     """
     if not column_names or not results:
         return
@@ -67,6 +70,16 @@ def display_results(column_names, results, query_id=None, runtime=None):
     if query_id:
         console.print(f"Query ID: {query_id}")
         console.print(f"Query Time: {runtime:.2f}s")
+        
+    # Export to CSV if output_file is provided
+    if output_file:
+        if export_query_results_to_csv(column_names, results, output_file, append=append_csv):
+            if not append_csv:
+                console.print(f"\nQuery results exported to: {output_file}")
+            else:
+                console.print(f"\nQuery results appended to: {output_file}")
+        else:
+            console.print(f"\nFailed to export query results to: {output_file}")
 
 
 def handle_query(connection, query):
@@ -116,7 +129,7 @@ def handle_query(connection, query):
     return column_names, results, connection.query_id
 
 
-def handle_query_with_progress(connection, query, mock_mode=False):
+def handle_query_with_progress(connection, query, mock_mode=False, output_file=None):
     """Handle query execution with progress tracking.
     
     This function executes the query with progress tracking.
@@ -133,6 +146,7 @@ def handle_query_with_progress(connection, query, mock_mode=False):
         connection (DorisConnection): Database connection
         query (str): SQL query to execute
         mock_mode (bool): Whether to use mock mode for progress tracking
+        output_file (str, optional): Path to output CSV file
         
     Returns:
         tuple: (column_names, results, query_id, progress_tracker, runtime) 
@@ -185,7 +199,7 @@ def handle_query_with_progress(connection, query, mock_mode=False):
             queries = [q.strip() for q in sql.split(';') if q.strip()]
             
             column_names, results, query_id, progress_tracker, runtime = None, None, None, None, None
-            for query in queries:
+            for i, query in enumerate(queries):
                 print(f"Executing query: {query}")
                 # Each query will get a new query_id
                 column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress_single(
@@ -194,7 +208,9 @@ def handle_query_with_progress(connection, query, mock_mode=False):
                 
                 # Display results for each query
                 if column_names and results:
-                    display_results(column_names, results, query_id, runtime)
+                    # First query overwrites, subsequent queries append
+                    append_mode = i > 0 if output_file else False 
+                    display_results(column_names, results, query_id, runtime, output_file, append_csv=append_mode)
                     print()  # Add empty line for readability
             
             return column_names, results, query_id, progress_tracker, runtime
@@ -258,7 +274,9 @@ def handle_query_with_progress(connection, query, mock_mode=False):
                     
                     # 显示每条语句的结果
                     if column_names and rows:
-                        display_results(column_names, rows, query_id, runtime)
+                        # First statement overwrites, subsequent statements append
+                        append_mode = idx > 0 if output_file else False
+                        display_results(column_names, rows, query_id, runtime, output_file, append_csv=append_mode)
                         print()  # 添加空行提高可读性
                     
                     # Remember the last successful results
@@ -385,7 +403,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
     return column_names, results, connection.query_id, progress_tracker, runtime
 
 
-def run_benchmark(connection, sql_path, times=1, mock_mode=False):
+def run_benchmark(connection, sql_path, times=1, mock_mode=False, output_file=None):
     """Run benchmark for SQL queries in a file or all SQL files in a directory.
     
     This function executes SQL queries for benchmarking. It supports:
@@ -399,6 +417,7 @@ def run_benchmark(connection, sql_path, times=1, mock_mode=False):
         sql_path (str): Path to the SQL file or directory
         times (int): Number of times to run each query
         mock_mode (bool): Whether to use mock mode for progress tracking
+        output_file (str, optional): Path to output CSV file
         
     Returns:
         bool: True if all queries executed successfully, False otherwise
@@ -704,10 +723,154 @@ def run_benchmark(connection, sql_path, times=1, mock_mode=False):
         
         console.print(queries_table)
         
+        # Export results to CSV if output_file is provided
+        if output_file:
+            # Create a dictionary of overall statistics for CSV export
+            stats_dict = {
+                "Total Runtime": f"{total_runtime:.2f} seconds",
+                "Number of Queries": str(len(benchmark_results)),
+                "Total Executions": str(len(benchmark_results) * times)
+            }
+            
+            # Export to CSV
+            if export_benchmark_results_to_csv(benchmark_results, run_times_by_number, stats_dict, output_file):
+                print(f"\nBenchmark results exported to: {output_file}")
+            else:
+                print(f"\nFailed to export benchmark results to: {output_file}")
+        
         return True
     finally:
         # Restore original handler
         signal.signal(signal.SIGINT, original_handler)
+
+
+def export_query_results_to_csv(column_names, results, output_file, append=False):
+    """Export query results to a CSV file.
+    
+    Args:
+        column_names (list): List of column names
+        results (list): List of dictionaries containing results
+        output_file (str): Path to the output CSV file
+        append (bool): Whether to append to an existing file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Check if the file exists when appending
+        file_exists = os.path.exists(output_file) if append else False
+        
+        # Open in append mode if requested and file exists
+        mode = 'a' if append and file_exists else 'w'
+        
+        with open(output_file, mode, newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            # Add a separator if appending
+            if append and file_exists:
+                writer.writerow([])  # Empty line as separator
+                writer.writerow([f"# SQL Query Results"])
+            
+            # Write header
+            writer.writerow(column_names)
+            
+            # Write rows
+            for row in results:
+                writer.writerow([row.get(col, "") for col in column_names])
+                
+        return True
+    except Exception as e:
+        print(f"Error exporting to CSV: {e}")
+        return False
+        
+        
+def export_benchmark_results_to_csv(benchmark_results, run_times_by_number, stats, output_file):
+    """Export benchmark results to a CSV file.
+    
+    This exports the Query Execution Times table and the Overall Statistics table.
+    
+    Args:
+        benchmark_results (list): List of query results
+        run_times_by_number (list): List of run times grouped by run number
+        stats (dict): Dictionary containing overall statistics
+        output_file (str): Path to the output CSV file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        with open(output_file, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            # Write Query Execution Times table
+            writer.writerow(["# Query Execution Times (seconds)"])
+            
+            # Determine number of runs
+            times = len(run_times_by_number)
+            
+            # Write header row
+            header = ["No.", "Query #", "Source"]
+            for run in range(1, times + 1):
+                header.append(f"Run {run}")
+            header.extend(["Min", "Max", "Avg"])
+            writer.writerow(header)
+            
+            # Write data rows
+            for idx, result in enumerate(benchmark_results, 1):
+                query_num = result['query_num']
+                query_source = result['query_source']
+                times_list = [t['time'] for t in result['times']]
+                
+                # Calculate statistics
+                min_time = min(times_list) if times_list else 0
+                max_time = max(times_list) if times_list else 0
+                avg_time = sum(times_list) / len(times_list) if times_list else 0
+                
+                # Format row data
+                row = [idx, f"Query {query_num}", query_source]
+                
+                # Add times for each run
+                for run in range(times):
+                    if run < len(times_list):
+                        row.append(f"{times_list[run]:.4f}")
+                    else:
+                        row.append("N/A")
+                
+                # Add statistics
+                row.append(f"{min_time:.4f}")
+                row.append(f"{max_time:.4f}")
+                row.append(f"{avg_time:.4f}")
+                
+                writer.writerow(row)
+            
+            # Add summary row
+            summary_row = ["", "Average", ""]
+            for run_times in run_times_by_number:
+                if run_times:
+                    avg_for_run = sum(run_times) / len(run_times)
+                    summary_row.append(f"{avg_for_run:.4f}")
+                else:
+                    summary_row.append("N/A")
+            
+            # Add placeholders for min/max/avg columns
+            summary_row.extend(["", "", ""])
+            writer.writerow(summary_row)
+            
+            # Add empty row as separator
+            writer.writerow([])
+            
+            # Write Overall Statistics table
+            writer.writerow(["# Overall Statistics"])
+            writer.writerow(["Metric", "Value"])
+            
+            # Write individual statistics
+            for key, value in stats.items():
+                writer.writerow([key, value])
+                
+        return True
+    except Exception as e:
+        print(f"Error exporting benchmark results to CSV: {e}")
+        return False
 
 
 @click.command()
@@ -722,7 +885,8 @@ def run_benchmark(connection, sql_path, times=1, mock_mode=False):
 @click.option("--benchmark", help="Run benchmark on SQL queries from a file or all .sql files in a directory")
 @click.option("--times", type=int, default=1, help="Number of times to run each query in benchmark mode")
 @click.option("--mock", is_flag=True, help="Enable mock mode for progress tracking")
-def main(host, port, http_port, user, password, database, execute, file, benchmark, times, mock):
+@click.option("--output", help="Output results to a CSV file (e.g., res.csv)")
+def main(host, port, http_port, user, password, database, execute, file, benchmark, times, mock, output):
     """Apache Doris Command Line Interface with query progress reporting."""
     
     # Connect to Apache Doris
@@ -737,7 +901,7 @@ def main(host, port, http_port, user, password, database, execute, file, benchma
     # Benchmark mode
     if benchmark:
         try:
-            success = run_benchmark(connection, benchmark, times, mock)
+            success = run_benchmark(connection, benchmark, times, mock, output)
             if not success:
                 sys.exit(1)
         except KeyboardInterrupt:
@@ -770,13 +934,13 @@ def main(host, port, http_port, user, password, database, execute, file, benchma
             
             # 执行查询
             column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
-                connection, execute, mock
+                connection, execute, mock, output
             )
             
             # 只有在单语句查询时才需要在这里显示结果
             # 多语句查询的结果已经在 handle_query_with_progress 中显示了
             if column_names and results and not is_multi_statement:
-                display_results(column_names, results, query_id, runtime)
+                display_results(column_names, results, query_id, runtime, output)
         except KeyboardInterrupt:
             print("Query cancelled by user.")
         except EOFError:
@@ -794,8 +958,10 @@ def main(host, port, http_port, user, password, database, execute, file, benchma
     if file:
         # 从文件执行总是按多语句处理，结果会在handle_query_with_progress中显示
         try:
-            handle_query_with_progress(connection, f"source {file}", mock)
-            # 不需要在这里显示结果，因为结果已经在执行过程中显示了
+            column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                connection, f"source {file}", mock, output
+            )
+            # 结果已经在处理过程中显示和导出了
         except KeyboardInterrupt:
             print("Query cancelled by user.")
         except EOFError:
@@ -913,7 +1079,7 @@ def main(host, port, http_port, user, password, database, execute, file, benchma
                 # Process query
                 try:
                     column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
-                        connection, query, mock
+                        connection, query, mock, output
                     )
                     
                     # Save progress tracker reference
@@ -939,7 +1105,7 @@ def main(host, port, http_port, user, password, database, execute, file, benchma
                     
                     # 仅对单语句查询显示结果，多语句结果已在执行过程中显示
                     if column_names and results and not is_multi_statement:
-                        display_results(column_names, results, query_id, runtime)
+                        display_results(column_names, results, query_id, runtime, output)
                 except Exception as e:
                     print(f"Error: {e}")
                     # Try to reconnect to clean up connection state after an error
@@ -1007,6 +1173,10 @@ def print_help():
       --times N                        Execute each query N times in benchmark mode (default: 1)
       --file, -f <file>                Execute queries from file and exit
       --execute, -e <query>            Execute a single query and exit
+      --output <file.csv>              Export results to a CSV file:
+                                       - In benchmark mode: exports execution times and statistics only
+                                       - With --file or --execute: exports query results
+                                         (for multiple SQL statements, all results are included)
     """
     print(help_text)
 
