@@ -17,3 +17,12 @@ doris_cmd.egg-info/dependency_links.txt
 doris_cmd.egg-info/entry_points.txt
 doris_cmd.egg-info/requires.txt
 doris_cmd.egg-info/top_level.txt
+test/__init__.py
+test/config.py
+test/conftest.py
+test/list_databases.py
+test/test_connection.py
+test/test_database_operations.py
+test/test_mock.py
+test/test_query_mock.py
+test/test_query_operations.py
