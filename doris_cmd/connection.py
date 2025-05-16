@@ -1,5 +1,7 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
-Connection module for Apache Doris.
+Connection module for Apache Doris CLI.
 """
 import uuid
 import pymysql
@@ -42,7 +44,7 @@ class DorisConnection:
                 charset='utf8mb4',
                 cursorclass=DictCursor
             )
-            print(f"Connected to Apache Doris at {self.host}:{self.port}")
+            print("Connected to Apache Doris at {}:{}".format(self.host, self.port))
             
             # Generate a new query ID (but don't set it here)
             self.query_id = self._generate_query_id()
@@ -56,12 +58,12 @@ class DorisConnection:
             
             return True
         except Exception as e:
-            print(f"Connection failed: {e}")
+            print("Connection failed: {}".format(e))
             return False
         
     def _generate_query_id(self):
         """Generate a unique query ID."""
-        return f"doris_cmd_{uuid.uuid4().hex}"
+        return "doris_cmd_{}".format(uuid.uuid4().hex)
     
     def _set_query_id(self):
         """Set a new query ID for the current session using session_context."""
@@ -81,10 +83,10 @@ class DorisConnection:
             
             cursor = self.connection.cursor()
             # Set the query ID using session_context
-            cursor.execute(f"SET session_context = 'trace_id:{self.query_id}'")
+            cursor.execute("SET session_context = 'trace_id:{}'".format(self.query_id))
             return True
         except Exception as e:
-            print(f"Failed to set query ID: {e}")
+            print("Failed to set query ID: {}".format(e))
             # Try to clean up the connection and reconnect
             self._cleanup_after_error()
             return False
