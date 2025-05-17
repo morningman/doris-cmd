@@ -6,7 +6,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== Apache Doris Command Line Interface Installer ===${NC}"
+echo -e "${GREEN}=== Apache Doris Command Line Interface Build & Install Script ===${NC}"
 echo ""
 
 # Check if Python is installed
@@ -57,7 +57,7 @@ fi
 echo -e "${YELLOW}Checking for required packages...${NC}"
 
 # First, try to install in user mode
-echo -e "${GREEN}Installing doris-cmd and dependencies...${NC}"
+echo -e "${GREEN}Building and installing doris-cmd and dependencies...${NC}"
 $pip_cmd install --user -e .
 
 # Check if installation was successful
@@ -71,7 +71,7 @@ if [ $? -ne 0 ]; then
     sudo $pip_cmd install -e .
     
     if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: Failed to install doris-cmd.${NC}"
+        echo -e "${RED}Error: Failed to build and install doris-cmd.${NC}"
         exit 1
     fi
 fi
@@ -79,7 +79,7 @@ fi
 # Success message
 echo ""
 echo -e "${GREEN}=====================================${NC}"
-echo -e "${GREEN}doris-cmd has been installed successfully!${NC}"
+echo -e "${GREEN}doris-cmd has been built and installed successfully!${NC}"
 echo -e "${GREEN}Run 'doris-cmd --help' to get started.${NC}"
 echo -e "${GREEN}=====================================${NC}"
 
