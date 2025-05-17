@@ -6,6 +6,7 @@ A modern command line interface for Apache Doris
 
 - Interactive SQL command line interface
 - Query progress tracking
+- Query profile collection
 - Syntax highlighting
 - Command history
 - Auto-suggestions
@@ -87,6 +88,23 @@ doris-cmd -f my_queries.sql
 doris-cmd --config /path/to/config.ini -e "SHOW DATABASES"
 ```
 
+### Profile Mode
+
+Profile mode collects detailed query execution information for debugging and performance analysis.
+
+```bash
+# Execute a query and collect the profile information
+doris-cmd --profile -e "SELECT * FROM my_table"
+
+# Execute queries from a file with profile collection
+doris-cmd --profile -f my_queries.sql
+
+# Use profile mode in interactive shell
+doris-cmd --profile
+```
+
+Profile information is saved to `/tmp/.doris_profile/doris_profile_<query_id>.txt` and includes detailed execution data about the query.
+
 ### Benchmark Mode
 
 ```bash
@@ -139,6 +157,9 @@ doris-cmd --help
 
 # Test connection to a Doris instance
 doris-cmd --host localhost --port 9030 --user root --execute "SHOW DATABASES"
+
+# Test profile collection
+doris-cmd --host localhost --port 9030 --user root --profile -e "SELECT * FROM my_table"
 ```
 
 ## Troubleshooting
