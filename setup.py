@@ -18,6 +18,7 @@ setup(
         "prompt-toolkit>=3.0.24",
         "click>=8.0.3",
         "pygments>=2.10.0",
+        "rich>=10.0.0",
     ],
     extras_require={
         'dev': [
