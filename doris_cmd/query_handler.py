@@ -571,50 +571,69 @@ def handle_query_with_profile_single(connection, query):
                     # Get the HTTP port
                     http_port = connection.get_http_port()
                     if http_port:
-                        # Use the HTTP API to fetch the profile
-                        profile_url = f"http://{connection.host}:{http_port}/api/profile"
-                        params = {
-                            "query_id": actual_query_id
-                        }
+                        # Use the correct HTTP API URL to fetch the profile
+                        profile_url = f"http://{connection.host}:{http_port}/rest/v2/manager/query/profile/text/{actual_query_id}"
+                        
+                        # Set up basic authentication
+                        auth = None
+                        if connection.user:
+                            # Always pass auth even if password is empty string
+                            auth = (connection.user, connection.password if connection.password is not None else '')
                         
                         try:
-                            response = requests.get(profile_url, params=params, timeout=10)
+                            response = requests.get(profile_url, auth=auth, timeout=10)
                             
                             if response.status_code == 200:
-                                profile_data = response.json()
-                                
-                                # Save the profile data to a file
-                                profile_file = f"{profile_dir}/{actual_query_id}.json"
-                                with open(profile_file, 'w') as f:
-                                    json.dump(profile_data, f, indent=2)
-                                
-                                print(f"Profile saved to {profile_file}")
-                                
-                                # Also try to get fragments (this is optional)
+                                # Parse response JSON
                                 try:
-                                    fragments_url = f"http://{connection.host}:{http_port}/api/query_detail"
-                                    fragment_params = {
-                                        "query_id": actual_query_id
-                                    }
-                                    fragment_response = requests.get(fragments_url, params=fragment_params, timeout=10)
-                                    
-                                    if fragment_response.status_code == 200:
-                                        fragments_data = fragment_response.json()
+                                    response_json = response.json()
+                                    if response_json.get('msg') == 'success':
+                                        # Extract profile data from the response
+                                        # The data field is a JSON string with profile information
+                                        profile_data = response_json.get('data', '')
                                         
-                                        # Save the fragments data to a file
-                                        fragments_file = f"{profile_dir}/{actual_query_id}_fragments.json"
-                                        with open(fragments_file, 'w') as f:
-                                            json.dump(fragments_data, f, indent=2)
-                                        
-                                        print(f"Fragment information saved to {fragments_file}")
-                                except Exception as fragment_error:
-                                    print(f"Warning: Failed to fetch fragment information: {fragment_error}")
+                                        # Parse the profile data which is a JSON string
+                                        try:
+                                            if isinstance(profile_data, str):
+                                                profile_json = json.loads(profile_data)
+                                                # Extract the actual profile content
+                                                profile_content = profile_json.get('profile', '')
+                                                # Convert "\n" strings to actual newlines
+                                                profile_content = profile_content.replace('\\n', '\n')
+                                            else:
+                                                # If not a string, try to get profile directly
+                                                profile_content = profile_data.get('profile', str(profile_data))
+                                                profile_content = profile_content.replace('\\n', '\n')
+                                                
+                                            # Save the processed profile to file
+                                            profile_file = f"{profile_dir}/doris_profile_{actual_query_id}.txt"
+                                            with open(profile_file, 'w') as f:
+                                                f.write(profile_content)
+                                            print(f"Profile saved to {profile_file}")
+                                        except Exception as parse_err:
+                                            print(f"Failed to parse profile data: {parse_err}")
+                                            # Fall back to saving the raw data
+                                            profile_file = f"{profile_dir}/doris_profile_{actual_query_id}.txt"
+                                            with open(profile_file, 'w') as f:
+                                                f.write(str(profile_data))
+                                            print(f"Raw profile data saved to {profile_file}")
+                                    else:
+                                        print(f"Failed to get profile: API returned msg={response_json.get('msg')}")
+                                except ValueError:
+                                    # Not a JSON response
+                                    print(f"Failed to parse profile response as JSON, saving raw response")
+                                    profile_file = f"{profile_dir}/doris_profile_{actual_query_id}.txt"
+                                    with open(profile_file, 'w') as f:
+                                        f.write(response.text)
+                                    print(f"Raw response saved to {profile_file}")
                             else:
-                                print(f"Warning: Failed to fetch profile: HTTP {response.status_code}")
-                        except Exception as profile_error:
-                            print(f"Warning: Failed to fetch profile: {profile_error}")
+                                print(f"Failed to get profile: HTTP {response.status_code}")
+                                if response.text:
+                                    print(f"Error response: {response.text}")
+                        except Exception as profile_err:
+                            print(f"Error fetching profile: {profile_err}")
                     else:
-                        print("Warning: HTTP port not available, cannot fetch profile")
+                        print("Failed to get HTTP port. Cannot fetch profile.")
                 else:
                     print("Warning: Could not find query ID, profile collection skipped")
             except Exception as e:
