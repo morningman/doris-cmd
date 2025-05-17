@@ -8,6 +8,7 @@ import sys
 import signal
 import time
 import click
+import configparser
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
@@ -24,11 +25,11 @@ from doris_cmd.benchmark import run_benchmark
 
 
 @click.command()
-@click.option("--host", default="localhost", help="Apache Doris host")
-@click.option("--port", default=9030, type=int, help="Apache Doris MySQL port")
-@click.option("--http_port", default=None, type=int, help="Apache Doris HTTP port for progress tracking (auto-detected if not specified)")
-@click.option("--user", default="root", help="Username")
-@click.option("--password", default="", help="Password")
+@click.option("--config", help="Path to configuration file")
+@click.option("--host", default=None, help="Apache Doris host")
+@click.option("--port", default=None, type=int, help="Apache Doris MySQL port")
+@click.option("--user", default=None, help="Username")
+@click.option("--password", default=None, help="Password")
 @click.option("--database", default=None, help="Default database")
 @click.option("--execute", "-e", help="Execute query and exit")
 @click.option("--file", "-f", help="Execute queries from file and exit")
@@ -36,17 +37,31 @@ from doris_cmd.benchmark import run_benchmark
 @click.option("--times", type=int, default=1, help="Number of times to run each query in benchmark mode")
 @click.option("--mock", is_flag=True, help="Enable mock mode for progress tracking")
 @click.option("--output", help="Output results to a CSV file (e.g., res.csv)")
-def main(host, port, http_port, user, password, database, execute, file, benchmark, times, mock, output):
+def main(config, host, port, user, password, database, execute, file, benchmark, times, mock, output):
     """Apache Doris Command Line Interface with query progress reporting."""
+    
+    # Default values
+    default_host = "localhost"
+    default_port = 9030
+    default_user = "root"
+    default_password = ""
+    
+    # Load config file if specified
+    config_params = {}
+    if config:
+        config_params = load_config(config)
+    
+    # Apply values with precedence: command line > config file > defaults
+    host = host or config_params.get('host', default_host)
+    port = port or int(config_params.get('port', default_port))
+    user = user or config_params.get('user', default_user)
+    password = password or config_params.get('password', default_password)
+    database = database or config_params.get('database')
     
     # Connect to Apache Doris
     connection = DorisConnection(host, port, user, password, database)
     if not connection.connect():
         sys.exit(1)
-    
-    # Set HTTP port if provided by user
-    if http_port is not None:
-        connection.http_port = http_port
     
     # Benchmark mode
     if benchmark:
@@ -291,6 +306,44 @@ def main(host, port, http_port, user, password, database, execute, file, benchma
     finally:
         # Close connection
         connection.close()
+
+
+def load_config(config_path):
+    """Load configuration from a file.
+    
+    Args:
+        config_path (str): Path to the configuration file
+        
+    Returns:
+        dict: Dictionary containing configuration parameters
+    """
+    config_params = {}
+    
+    try:
+        if not os.path.exists(config_path):
+            print(f"Config file not found: {config_path}")
+            return config_params
+            
+        config = configparser.ConfigParser()
+        config.read(config_path)
+        
+        if 'doris' in config:
+            doris_section = config['doris']
+            
+            if 'host' in doris_section:
+                config_params['host'] = doris_section['host']
+            if 'port' in doris_section:
+                config_params['port'] = doris_section['port']
+            if 'user' in doris_section:
+                config_params['user'] = doris_section['user']
+            if 'password' in doris_section:
+                config_params['password'] = doris_section['password']
+            if 'database' in doris_section:
+                config_params['database'] = doris_section['database']
+    except Exception as e:
+        print(f"Error reading config file: {e}")
+    
+    return config_params
 
 
 if __name__ == "__main__":

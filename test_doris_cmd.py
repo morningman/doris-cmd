@@ -21,7 +21,6 @@ def test_connection(host, port, user, password, database):
     if success:
         print("✅ Connection successful")
         print(f"Initial Query ID: {connection.query_id}")
-        print(f"HTTP Port: {connection.http_port}")
         
         # Test getting current database
         current_db = connection.get_current_database()
@@ -91,29 +90,6 @@ def display_results(column_names, results, query_id=None):
     # Display query ID
     if query_id:
         print(f"Query ID: {query_id}")
-
-
-def test_http_port_detection(connection):
-    """Test HTTP port automatic detection."""
-    print("\n==== Testing HTTP Port Auto-detection ====")
-    
-    # Reconnect because the connection was closed earlier
-    success = connection.connect()
-    if not success:
-        print("❌ Connection failed")
-        return
-    
-    try:
-        # Check if HTTP port was obtained
-        http_port = connection.get_http_port()
-        if http_port:
-            print(f"✅ Successfully detected HTTP port: {http_port}")
-        else:
-            print("❌ Failed to detect HTTP port")
-        
-    finally:
-        # Close connection
-        connection.close()
 
 
 def test_simple_query(connection, mock_mode=False):
@@ -286,7 +262,6 @@ def main():
     parser = argparse.ArgumentParser(description="doris-cmd test script")
     parser.add_argument("--host", default="localhost", help="Apache Doris host")
     parser.add_argument("--port", type=int, default=9030, help="Apache Doris MySQL port")
-    parser.add_argument("--http_port", type=int, default=None, help="Apache Doris HTTP port (optional, auto-detect)")
     parser.add_argument("--user", default="root", help="Username")
     parser.add_argument("--password", default="", help="Password")
     parser.add_argument("--database", default=None, help="Database name")
@@ -297,10 +272,6 @@ def main():
     print("doris-cmd test script")
     print(f"Connection information: {args.host}:{args.port}")
     print(f"User: {args.user}, Database: {args.database or '(not specified)'}")
-    if args.http_port:
-        print(f"HTTP port: {args.http_port} (user specified)")
-    else:
-        print("HTTP port: auto-detect")
     print(f"Mock mode: {'Enabled' if args.mock else 'Disabled'}")
     
     # Test connection
@@ -308,16 +279,6 @@ def main():
     if connection is None:
         print("Cannot continue testing, connection failed")
         return
-    
-    # If the user specified an HTTP port, use that port
-    if args.http_port:
-        print(f"Using user-specified HTTP port: {args.http_port}")
-        connection = DorisConnection(args.host, args.port, args.user, args.password, args.database)
-        connection.http_port = args.http_port
-        connection.connect()
-    
-    # Test HTTP port auto-detection
-    test_http_port_detection(connection)
     
     # Test query_id generation
     test_query_id_generation(connection)

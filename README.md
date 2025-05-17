@@ -54,7 +54,25 @@ doris-cmd --host <hostname> --port <port> --user <username> --password <password
 
 # Specify a database
 doris-cmd --database <database>
+
+# Use a configuration file
+doris-cmd --config /path/to/config.ini
 ```
+
+### Configuration File
+
+You can specify connection settings in a configuration file:
+
+```ini
+[doris]
+host = your_doris_host
+port = 9030
+user = root
+password = your_password
+database = your_database
+```
+
+Command line arguments take precedence over configuration file values.
 
 ### Execute Query
 
@@ -64,6 +82,9 @@ doris-cmd -e "SELECT * FROM my_table LIMIT 10"
 
 # Execute queries from a file
 doris-cmd -f my_queries.sql
+
+# Use a configuration file and execute a query
+doris-cmd --config /path/to/config.ini -e "SHOW DATABASES"
 ```
 
 ### Benchmark Mode
