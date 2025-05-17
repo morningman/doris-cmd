@@ -149,63 +149,14 @@ build_standalone_binary() {
     return 0
 }
 
-# Function to create source distribution package
-create_source_dist() {
-    echo -e "${BLUE}Creating source distribution package...${NC}"
-    
-    # Check if Python is installed
-    if ! command -v python3 &> /dev/null; then
-        echo -e "${RED}Error: Python 3 is required but not found.${NC}"
-        return 1
-    fi
-    
-    # Create source distribution package
-    echo -e "${YELLOW}Creating source distribution...${NC}"
-    python3 setup.py sdist
-    
-    # Create wheel package
-    echo -e "${YELLOW}Creating wheel package...${NC}"
-    python3 setup.py bdist_wheel
-    
-    # Display generated files
-    echo -e "${GREEN}Packages created:${NC}"
-    ls -la "${SCRIPT_DIR}/dist/"
-    
-    return 0
-}
-
 # Display title
 echo -e "${GREEN}=======================================${NC}"
 echo -e "${GREEN}Apache Doris Command Line Interface Packager${NC}"
 echo -e "${GREEN}=======================================${NC}"
 echo ""
 
-# Display options menu
-echo -e "${YELLOW}Select the build option:${NC}"
-echo -e "1) ${GREEN}Build standalone binary for current platform${NC} (using PyInstaller)"
-echo -e "2) ${GREEN}Create source distribution package${NC} (pip installable)"
-echo -e "3) ${GREEN}Exit${NC}"
-echo ""
-
-# Read user selection
-read -p "Enter your choice [1-3]: " choice
-
-case $choice in
-    1) 
-        build_standalone_binary
-        ;;
-    2)
-        create_source_dist
-        ;;
-    3)
-        echo -e "${GREEN}Exiting.${NC}"
-        exit 0
-        ;;
-    *)
-        echo -e "${RED}Invalid option. Exiting.${NC}"
-        exit 1
-        ;;
-esac
+# Start building the standalone binary
+build_standalone_binary
 
 echo -e "\n${GREEN}=======================================${NC}"
 echo -e "${GREEN}Package creation completed.${NC}"

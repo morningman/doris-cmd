@@ -15,20 +15,6 @@ A modern command line interface for Apache Doris
 
 ## Installation
 
-### Standalone Binary (No Dependencies Required)
-
-Download the standalone binary for your platform from the releases page. This binary doesn't require Python or any other dependencies:
-
-```bash
-# Make the binary executable (if needed)
-chmod +x doris-cmd-linux-0.2.0  # or doris-cmd-macos-0.2.0
-
-# Run the binary
-./doris-cmd-linux-0.2.0
-```
-
-### Quick Install (Source)
-
 Use the provided build-install script to automatically check for dependencies, build and install doris-cmd:
 
 ```bash
@@ -38,19 +24,6 @@ cd doris-cmd
 
 # Run the build-install script
 ./build-install.sh
-```
-
-### Manual Installation (Source)
-
-If you prefer to install manually:
-
-```bash
-# Clone the repository
-git clone https://github.com/morningman/doris-cmd.git
-cd doris-cmd
-
-# Install with pip
-pip install -e .
 ```
 
 ## Requirements
@@ -118,17 +91,13 @@ Inside the interactive shell:
 - Use `\t` or `show tables` to show tables
 - Press Ctrl+D to cancel any running query and exit
 
-## Building from Source
-
-### Building Standalone Binaries
+## Building Standalone Binaries
 
 doris-cmd includes a packaging script to build standalone executables that don't require Python or any other dependencies:
 
 ```bash
-# Run the packaging script
+# Run the packaging script to build a standalone binary for your platform
 ./package.sh
-
-# Select option 1 to build a standalone binary for your platform
 ```
 
 The resulting binaries will be placed in the `dist/` directory, named according to your platform:
