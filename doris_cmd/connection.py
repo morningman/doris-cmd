@@ -31,6 +31,7 @@ class DorisConnection:
         self.trace_id = None
         self.http_port = None
         self.version = None
+        self.connection_id = None
         
     def connect(self):
         """Establish connection to Apache Doris."""
@@ -55,6 +56,9 @@ class DorisConnection:
             
             # Get the HTTP port
             self.http_port = self._get_http_port()
+            
+            # Get the connection ID
+            self._get_connection_id()
             
             return True
         except Exception as e:
@@ -357,6 +361,14 @@ class DorisConnection:
             return "internal"
         finally:
             cursor.close()
+
+    def get_current_connection_id(self):
+        """Get the current connection ID.
+        
+        Returns:
+            int: Current connection ID or None if not available
+        """
+        return self.connection_id
     
     def use_database(self, database):
         """Change the current database.
@@ -410,46 +422,38 @@ class DorisConnection:
             cursor.close()
     
     def cancel_query(self, http_port=None):
-        """Cancel the current running query using Doris HTTP API.
+        """Cancel the current running query using KILL QUERY command.
         
         Args:
-            http_port (int, optional): The HTTP port of Apache Doris server.
-                                     If not provided, it will try to get the port.
+            http_port (int, optional): Not used anymore, kept for backward compatibility.
             
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.trace_id:
+        if not self.connection_id:
+            print("Cannot cancel query: Connection ID not available")
             return False
             
-        # Get the HTTP port if not provided
-        if http_port is None:
-            http_port = self.get_http_port()
-            if http_port is None:
-                print("Cannot cancel query: HTTP port not available")
-                return False
-            
+        # We need a separate connection to kill the query
         try:
-            # Use Doris HTTP API to cancel the query
-            cancel_url = f"http://{self.host}:{http_port}/api/cancel_query"
-            params = {
-                "query_id": self.trace_id
-            }
-            response = requests.get(cancel_url, params=params, timeout=5)
+            kill_connection = pymysql.connect(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                charset='utf8mb4',
+                cursorclass=DictCursor
+            )
             
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('status') == 'OK':
-                    print(f"Query cancelled: {self.trace_id}")
-                    return True
-                else:
-                    print(f"Failed to cancel query: {result.get('msg', 'Unknown error')}")
-            else:
-                print(f"Failed to cancel query: HTTP {response.status_code}")
-                
-            return False
+            cursor = kill_connection.cursor()
+            cursor.execute(f"KILL QUERY {self.connection_id}")
+            cursor.close()
+            kill_connection.close()
+            
+            print(f"Query on connection {self.connection_id} cancelled")
+            return True
         except Exception as e:
-            print(f"Failed to cancel query: {e}")
+            print(f"Failed to cancel query by connection id '{self.connection_id}': {e}")
             return False
             
     def reset_trace_id(self):
@@ -479,6 +483,7 @@ class DorisConnection:
                 # Ignore errors while closing a possibly broken connection
                 pass
             self.connection = None
+            self.connection_id = None
         
         # Try to establish a new connection
         return self.connect()
@@ -503,4 +508,32 @@ class DorisConnection:
             print(f"Failed to get Doris version: {e}")
             return None
         finally:
-            cursor.close() 
+            cursor.close()
+    
+    def _get_connection_id(self):
+        """Get the current connection ID from Doris.
+        
+        Returns:
+            int: Current connection ID or None if not available
+        """
+        if not self.connection:
+            return None
+            
+        cursor = None
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT CONNECTION_ID()")
+            result = cursor.fetchone()
+            if result and 'CONNECTION_ID()' in result:
+                self.connection_id = result['CONNECTION_ID()']
+                return self.connection_id
+            return None
+        except Exception as e:
+            print(f"Failed to get connection ID: {e}")
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass 

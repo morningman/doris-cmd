@@ -200,9 +200,10 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                 # Get current database and catalog for prompt
                 current_db = connection.get_current_database() or "(none)"
                 current_catalog = connection.get_current_catalog() or "internal"
+                current_connection_id = connection.get_current_connection_id() or "(none)"
                 
                 # Display prompt with catalog and database name
-                prompt_text = f"doris-cmd [{current_catalog}][{current_db}]> "
+                prompt_text = f"doris-cmd [{current_catalog}][{current_db}]({current_connection_id})> "
                 
                 # Collect multi-line SQL until semicolon + newline is encountered
                 query_buffer = []
