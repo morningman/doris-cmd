@@ -28,7 +28,7 @@ class DorisConnection:
         self.password = password
         self.database = database
         self.connection = None
-        self.query_id = None
+        self.trace_id = None
         self.http_port = None
         self.version = None
         
@@ -46,8 +46,8 @@ class DorisConnection:
             )
             print("Connected to Apache Doris at {}:{}".format(self.host, self.port))
             
-            # Generate a new query ID (but don't set it here)
-            self.query_id = self._generate_query_id()
+            # Generate a new trace ID (but don't set it here)
+            self.trace_id = self._generate_trace_id()
             
             # Get Doris version (but don't print it here - it will be printed by CLI)
             version = self._get_doris_version()
@@ -61,17 +61,23 @@ class DorisConnection:
             print("Connection failed: {}".format(e))
             return False
         
-    def _generate_query_id(self):
-        """Generate a unique query ID."""
+    def _generate_trace_id(self):
+        """Generate a unique trace ID."""
         return "doris_cmd_{}".format(uuid.uuid4().hex)
     
-    def _set_query_id(self):
-        """Set a new query ID for the current session using session_context."""
+    def _set_trace_id(self):
+        """Set a trace ID for the current session using session_context.
+        
+        This sets the trace_id in session_context which Doris uses to track queries.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
         if not self.connection:
             return False
         
-        # Generate a new query ID for this query
-        self.query_id = self._generate_query_id()
+        # Generate a new trace ID for this query
+        self.trace_id = self._generate_trace_id()
         
         cursor = None
         try:
@@ -82,11 +88,11 @@ class DorisConnection:
                     return False
             
             cursor = self.connection.cursor()
-            # Set the query ID using session_context
-            cursor.execute("SET session_context = 'trace_id:{}'".format(self.query_id))
+            # Set the trace ID using session_context
+            cursor.execute("SET session_context = 'trace_id:{}'".format(self.trace_id))
             return True
         except Exception as e:
-            print("Failed to set query ID: {}".format(e))
+            print("Failed to set trace ID: {}".format(e))
             # Try to clean up the connection and reconnect
             self._cleanup_after_error()
             return False
@@ -151,7 +157,7 @@ class DorisConnection:
         cursor = self.connection.cursor()
         try:
             # Set a new query ID for this operation
-            self._set_query_id()
+            self._set_trace_id()
             
             # Execute SHOW FRONTENDS
             cursor.execute("SHOW FRONTENDS")
@@ -188,12 +194,12 @@ class DorisConnection:
             self.http_port = self._get_http_port()
         return self.http_port
     
-    def execute_query(self, sql, set_query_id=True):
+    def execute_query(self, sql, set_trace_id=True):
         """Execute a SQL query.
         
         Args:
             sql (str): SQL query to execute
-            set_query_id (bool): Whether to set a new query ID before executing
+            set_trace_id (bool): Whether to set a new trace ID before executing
             
         Returns:
             tuple: (column_names, results)
@@ -212,9 +218,9 @@ class DorisConnection:
                 return None, None
         
         # Set a new query ID before executing the query if requested
-        if set_query_id:
-            if not self._set_query_id():
-                print("Warning: Failed to set query ID. Query tracking may not work properly.")
+        if set_trace_id:
+            if not self._set_trace_id():
+                print("Warning: Failed to set trace ID. Query tracking may not work properly.")
         
         cursor = None
         try:
@@ -251,12 +257,12 @@ class DorisConnection:
                     # Ignore errors when closing cursor
                     pass
     
-    def execute_file(self, file_path, set_query_id=True):
+    def execute_file(self, file_path, set_trace_id=True):
         """Execute SQL from a file.
         
         Args:
             file_path (str): Path to the SQL file
-            set_query_id (bool): Whether to set a new query ID for each query
+            set_trace_id (bool): Whether to set a new trace ID for each query
             
         Returns:
             tuple: (column_names, results) of the last query in the file
@@ -276,8 +282,8 @@ class DorisConnection:
             column_names, results = None, None
             for query in queries:
                 print(f"Executing query: {query}")
-                # Each query gets a new query ID if set_query_id is True
-                column_names, results = self.execute_query(query, set_query_id=set_query_id)
+                # Each query gets a new trace ID if set_trace_id is True
+                column_names, results = self.execute_query(query, set_trace_id=set_trace_id)
                 
             return column_names, results
         except Exception as e:
@@ -294,7 +300,7 @@ class DorisConnection:
             return None
             
         # Set a new query ID for this operation
-        self._set_query_id()
+        self._set_trace_id()
         
         cursor = self.connection.cursor()
         try:
@@ -316,7 +322,7 @@ class DorisConnection:
             return None
             
         # Set a new query ID for this operation
-        self._set_query_id()
+        self._set_trace_id()
         
         cursor = self.connection.cursor()
         try:
@@ -350,7 +356,7 @@ class DorisConnection:
             return False
             
         # Set a new query ID for this operation
-        self._set_query_id()
+        self._set_trace_id()
         
         cursor = self.connection.cursor()
         try:
@@ -376,7 +382,7 @@ class DorisConnection:
             return False
             
         # Set a new query ID for this operation
-        self._set_query_id()
+        self._set_trace_id()
         
         cursor = self.connection.cursor()
         try:
@@ -398,7 +404,7 @@ class DorisConnection:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.query_id:
+        if not self.trace_id:
             return False
             
         # Get the HTTP port if not provided
@@ -412,14 +418,14 @@ class DorisConnection:
             # Use Doris HTTP API to cancel the query
             cancel_url = f"http://{self.host}:{http_port}/api/cancel_query"
             params = {
-                "query_id": self.query_id
+                "query_id": self.trace_id
             }
             response = requests.get(cancel_url, params=params, timeout=5)
             
             if response.status_code == 200:
                 result = response.json()
                 if result.get('status') == 'OK':
-                    print(f"Query cancelled: {self.query_id}")
+                    print(f"Query cancelled: {self.trace_id}")
                     return True
                 else:
                     print(f"Failed to cancel query: {result.get('msg', 'Unknown error')}")
@@ -431,9 +437,9 @@ class DorisConnection:
             print(f"Failed to cancel query: {e}")
             return False
             
-    def reset_query_id(self):
-        """Generate a new query ID and set it for the current session."""
-        return self._set_query_id()
+    def reset_trace_id(self):
+        """Generate a new trace ID and set it for the current session."""
+        return self._set_trace_id()
     
     def close(self):
         """Close the connection."""

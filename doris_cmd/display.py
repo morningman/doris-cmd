@@ -8,13 +8,13 @@ from rich.table import Table
 from rich.style import Style as RichStyle
 
 
-def display_results(column_names, results, query_id=None, runtime=None, output_file=None, append_csv=False):
+def display_results(column_names, results, trace_id=None, runtime=None, output_file=None, append_csv=False):
     """Display query results in tabular format using rich.
     
     Args:
         column_names (list): List of column names
         results (list): List of dictionaries containing results
-        query_id (str, optional): The query ID associated with this result
+        trace_id (str, optional): The trace ID associated with this result
         runtime (float, optional): Query runtime in seconds
         output_file (str, optional): Path to output CSV file
         append_csv (bool): Whether to append to the CSV file if it exists
@@ -44,8 +44,8 @@ def display_results(column_names, results, query_id=None, runtime=None, output_f
     console.print(f"\nRows: {len(results)}")
     
     # Display the query ID and runtime if provided
-    if query_id:
-        console.print(f"Query ID: {query_id}")
+    if trace_id:
+        console.print(f"Trace ID: {trace_id}")
         console.print(f"Query Time: {runtime:.2f}s")
         
     # Export to CSV if output_file is provided

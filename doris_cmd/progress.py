@@ -11,7 +11,7 @@ import random
 class ProgressTracker:
     """Track and display query progress."""
 
-    def __init__(self, host, port=None, query_id=None, connection=None, mock_mode=False, 
+    def __init__(self, host, port=None, trace_id=None, connection=None, mock_mode=False, 
                  auth_user=None, auth_password=None, auth_headers=None, auth_cookies=None):
         """Initialize a progress tracker.
         
@@ -19,7 +19,7 @@ class ProgressTracker:
             host (str): The host of Apache Doris server
             port (int, optional): The HTTP port of Apache Doris server. If not provided,
                                  connection must be provided to get the port.
-            query_id (str, optional): The query ID to track, can be set later
+            trace_id (str, optional): The trace ID to track, can be set later
             connection (DorisConnection, optional): Connection to Doris for getting HTTP port
             mock_mode (bool, optional): Whether to use mock data for testing
             auth_user (str, optional): Username for Basic Authentication
@@ -29,7 +29,7 @@ class ProgressTracker:
         """
         self.host = host
         self.port = port
-        self.query_id = query_id
+        self.trace_id = trace_id
         self.connection = connection
         self.tracking = False
         self.thread = None
@@ -139,12 +139,12 @@ class ProgressTracker:
         # Now begin actual progress tracking
         while self.tracking:
             try:
-                # Skip if query_id is not set
-                if not self.query_id and not self.mock_mode:
+                # Skip if trace_id is not set
+                if not self.trace_id and not self.mock_mode:
                     time.sleep(0.1)
                     continue
                     
-                # In mock mode, we don't need a port or query_id
+                # In mock mode, we don't need a port or trace_id
                 if not self.mock_mode:
                     # Skip if port is not set
                     if self.port is None:
@@ -272,7 +272,7 @@ class ProgressTracker:
         """
         try:
             # New Doris FE HTTP API for query progress
-            url = f"http://{self.host}:{self.port}/rest/v2/manager/query/progres/query/{self.query_id}"
+            url = f"http://{self.host}:{self.port}/rest/v2/manager/query/progres/query/{self.trace_id}"
             
             try:
                 # Setup authentication
@@ -361,7 +361,7 @@ class ProgressTracker:
             # If there's no progress data, at least show runtime
             mock_indicator = "[Mock] " if self.mock_mode else ""
             runtime_str = f"Runtime: {runtime_ms/1000:.2f}s"
-            progress_str = f"\r{mock_indicator}ID: {self.query_id} | {runtime_str} | Waiting for progress data..."
+            progress_str = f"\r{mock_indicator}ID: {self.trace_id} | {runtime_str} | Waiting for progress data..."
             # Clear the entire line, then print new progress information
             # Use a string of spaces long enough to cover the whole line, then return to line start to print new information
             print("\r" + " " * 150 + "\r" + progress_str, end="")
@@ -420,8 +420,8 @@ class ProgressTracker:
                 error = error[:47] + "..."
             error_str = f" | Error: {error}"
         
-        # Display progress information with query_id and new metrics
-        progress_str = f"{mock_indicator}State: {state} | ID: {self.query_id} | {runtime_str} | ScannedRows: {formatted_rows} | ScannedBytes: {readable_bytes} | CPU: {cpu_time} | Mem: {readable_memory}{time_str}{error_str}"
+        # Display progress information with trace_id and new metrics
+        progress_str = f"{mock_indicator}State: {state} | Trace ID: {self.trace_id} | {runtime_str} | ScannedRows: {formatted_rows} | ScannedBytes: {readable_bytes} | CPU: {cpu_time} | Mem: {readable_memory}{time_str}{error_str}"
         
         # Clear the entire line, then print new progress information
         # Use a string of spaces long enough to cover the whole line, then return to line start to print new information

@@ -41,13 +41,13 @@ def test_execute_file(doris_connection, test_database):
         os.unlink(sql_file)
 
 
-def test_reset_query_id(doris_connection):
-    """Test resetting the query ID."""
+def test_reset_trace_id(doris_connection):
+    """Test resetting the trace ID."""
     # Get the current query ID
     original_query_id = doris_connection.query_id
     
-    # Reset the query ID
-    success = doris_connection.reset_query_id()
+    # Reset the trace ID
+    success = doris_connection.reset_trace_id()
     
     # Verify that the query ID changed
     assert success is True

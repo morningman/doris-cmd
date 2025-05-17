@@ -37,7 +37,8 @@ from doris_cmd.benchmark import run_benchmark
 @click.option("--times", type=int, default=1, help="Number of times to run each query in benchmark mode")
 @click.option("--mock", is_flag=True, help="Enable mock mode for progress tracking")
 @click.option("--output", help="Output results to a CSV file (e.g., res.csv)")
-def main(config, host, port, user, password, database, execute, file, benchmark, times, mock, output):
+@click.option("--profile", is_flag=True, help="Enable profile mode to collect query profiles")
+def main(config, host, port, user, password, database, execute, file, benchmark, times, mock, output, profile):
     """Apache Doris Command Line Interface with query progress reporting."""
     
     # Default values
@@ -63,6 +64,11 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
     if not connection.connect():
         sys.exit(1)
     
+    # Check for incompatible options
+    if benchmark and profile:
+        print("Error: --benchmark and --profile cannot be used together")
+        sys.exit(1)
+    
     # Benchmark mode
     if benchmark:
         try:
@@ -77,6 +83,16 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
             connection.close()
         return
     
+    # Set up profile mode if enabled
+    if profile:
+        # Enable profile by setting enable_profile=true
+        try:
+            connection.execute_query("SET enable_profile=true")
+            print("Profile mode enabled")
+        except Exception as e:
+            print(f"Failed to enable profile mode: {e}")
+            sys.exit(1)
+
     # Non-interactive mode: execute query from command line
     if execute:
         try:
@@ -97,22 +113,25 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                         is_multi_statement = True
                         break
             
-            # Execute query
-            column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
-                connection, execute, mock, output
-            )
+            # Execute query with progress or profiling
+            if profile:
+                from doris_cmd.query_handler import handle_query_with_profile
+                column_names, results, query_id, runtime = handle_query_with_profile(
+                    connection, execute, output
+                )
+            else:
+                column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                    connection, execute, mock, output
+                )
             
             # Only display results here for single-statement queries
-            # For multi-statement queries, results are already displayed in handle_query_with_progress
+            # For multi-statement queries, results are already displayed in handler
             if column_names and results and not is_multi_statement:
                 display_results(column_names, results, query_id, runtime, output)
         except KeyboardInterrupt:
             print("Query cancelled by user.")
         except EOFError:
             print("\nReceived exit signal (Ctrl+D)")
-            # Stop any active progress tracking
-            if progress_tracker and progress_tracker.tracking:
-                progress_tracker.stop_tracking()
             # Cancel any running query
             connection.cancel_query()
         finally:
@@ -122,19 +141,22 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
     # Non-interactive mode: execute queries from file
     if file:
         # File execution is always handled as multi-statement queries
-        # Results are displayed in handle_query_with_progress
+        # Results are displayed in handler
         try:
-            column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
-                connection, f"source {file}", mock, output
-            )
+            if profile:
+                from doris_cmd.query_handler import handle_query_with_profile
+                column_names, results, query_id, runtime = handle_query_with_profile(
+                    connection, f"source {file}", output
+                )
+            else:
+                column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                    connection, f"source {file}", mock, output
+                )
             # Results have already been displayed and exported during processing
         except KeyboardInterrupt:
             print("Query cancelled by user.")
         except EOFError:
             print("\nReceived exit signal (Ctrl+D)")
-            # Stop any active progress tracking
-            if 'progress_tracker' in locals() and progress_tracker and progress_tracker.tracking:
-                progress_tracker.stop_tracking()
             # Cancel any running query
             connection.cancel_query()
         finally:
@@ -168,8 +190,8 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
     print(f"Press Ctrl+D to cancel any running query and exit")
     print(f"Use semicolon (;) followed by Enter to execute a query")
     
-    # Variable to track active query progress tracker
-    active_progress_tracker = None
+    if profile:
+        print(f"Profile mode is enabled. Profiles will be saved to /tmp/.doris_profile/")
     
     # Main loop
     try:
@@ -244,14 +266,16 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                 
                 # Process query
                 try:
-                    column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
-                        connection, query, mock, output
-                    )
+                    if profile:
+                        from doris_cmd.query_handler import handle_query_with_profile
+                        column_names, results, query_id, runtime = handle_query_with_profile(
+                            connection, query, output
+                        )
+                    else:
+                        column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                            connection, query, mock, output
+                        )
                     
-                    # Save progress tracker reference
-                    active_progress_tracker = progress_tracker
-                    
-                    # Display query results - for multi-statements, results are already shown in handle_query_with_progress
                     # Check if this is a multi-statement query (by semicolons outside of quotes)
                     is_multi_statement = False
                     in_quotes = False
@@ -294,9 +318,6 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
             except EOFError:
                 # Handle Ctrl+D (EOF)
                 print("\nReceived exit signal (Ctrl+D)")
-                # Stop any active progress tracking
-                if active_progress_tracker and active_progress_tracker.tracking:
-                    active_progress_tracker.stop_tracking()
                 # Cancel any running query
                 connection.cancel_query()
                 # Break out of the loop to exit

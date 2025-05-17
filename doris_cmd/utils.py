@@ -33,10 +33,11 @@ def print_help():
     Special Features:
       - Press Ctrl+C to cancel a running query
       - Press Ctrl+D to cancel any running query and exit
-      - Query progress is displayed in real-time
+      - Query progress is displayed in real-time (when not in profile mode)
       - Each query gets a new query ID for tracking
       - Query ID and runtime are displayed with results
       - HTTP port is auto-detected from Doris FE
+      - Profile mode: when enabled, collects and saves query profiles
       
     Command Line Options:
       --benchmark <path>               Run benchmark on SQL queries from a file or directory:
@@ -50,5 +51,8 @@ def print_help():
                                        - In benchmark mode: exports execution times and statistics only
                                        - With --file or --execute: exports query results
                                          (for multiple SQL statements, all results are included)
+      --profile                        Enable profile mode to collect and save query profiles.
+                                       Profiles are saved to /tmp/.doris_profile/ directory.
+                                       Note: Incompatible with --benchmark option.
     """
     print(help_text) 

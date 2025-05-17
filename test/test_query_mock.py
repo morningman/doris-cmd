@@ -17,8 +17,8 @@ from doris_cmd.connection import DorisConnection
 class TestQueryGeneration(unittest.TestCase):
     """Test query ID generation and manipulation."""
     
-    def test_generate_query_id(self):
-        """Test query ID generation."""
+    def test_generate_trace_id(self):
+        """Test trace ID generation."""
         conn = DorisConnection(
             host="localhost",
             port=9030,
@@ -26,16 +26,16 @@ class TestQueryGeneration(unittest.TestCase):
             password="test_password"
         )
         
-        # Generate a query ID
-        query_id = conn._generate_query_id()
+        # Generate a trace ID
+        query_id = conn._generate_trace_id()
         
         # Verify it has the expected format
         self.assertTrue(query_id.startswith("doris_cmd_"))
         self.assertEqual(len(query_id), len("doris_cmd_") + 32)  # 32 is the length of a hex UUID
     
     @patch.object(uuid, 'uuid4')
-    def test_generate_query_id_with_mock_uuid(self, mock_uuid4):
-        """Test query ID generation with a mocked UUID."""
+    def test_generate_trace_id_with_mock_uuid(self, mock_uuid4):
+        """Test trace ID generation with a mocked UUID."""
         # Set up mock
         mock_uuid4.return_value = MagicMock(hex='1234567890abcdef1234567890abcdef')
         
@@ -46,10 +46,10 @@ class TestQueryGeneration(unittest.TestCase):
             password="test_password"
         )
         
-        # Generate a query ID
-        query_id = conn._generate_query_id()
+        # Generate a trace ID
+        query_id = conn._generate_trace_id()
         
-        # Verify the query ID has the expected format with our mocked UUID
+        # Verify the trace ID has the expected format with our mocked UUID
         self.assertEqual(query_id, "doris_cmd_1234567890abcdef1234567890abcdef")
 
 
@@ -67,8 +67,8 @@ class TestQueryOperations(unittest.TestCase):
             database="test_db"
         )
     
-    def test_set_query_id(self, mock_connect):
-        """Test setting a query ID."""
+    def test_set_trace_id(self, mock_connect):
+        """Test setting a trace ID."""
         # Set up mock
         mock_connection = MagicMock()
         mock_cursor = MagicMock()
@@ -81,8 +81,8 @@ class TestQueryOperations(unittest.TestCase):
         # Get the initial query ID
         original_query_id = self.conn.query_id
         
-        # Set a new query ID
-        result = self.conn._set_query_id()
+        # Set a new trace ID
+        result = self.conn._set_trace_id()
         
         # Verify result and query ID changed
         self.assertTrue(result)

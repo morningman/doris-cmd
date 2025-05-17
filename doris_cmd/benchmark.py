@@ -161,7 +161,7 @@ def run_benchmark(connection, sql_path, times=1, mock_mode=False, output_file=No
                 try:
                     # Execute query and measure time - no need for query_id or progress tracking in benchmark mode
                     start_time = time.time()
-                    column_names, results = connection.execute_query(query, set_query_id=False)
+                    column_names, results = connection.execute_query(query, set_trace_id=False)
                     end_time = time.time()
                     
                     # Calculate execution time
