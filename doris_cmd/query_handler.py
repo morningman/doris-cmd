@@ -30,14 +30,14 @@ def _handle_special_commands(connection, query):
         db_name = query[4:].strip()
         if connection.use_database(db_name):
             print(f"Database changed to {db_name}")
-        return (None, None, None), True
+        return (None, None, None, None), True
     
     # Handle SWITCH command to change catalog
     if query.lower().startswith('switch '):
         catalog_name = query[7:].strip()
         if connection.switch_catalog(catalog_name):
             print(f"Catalog changed to {catalog_name}")
-        return (None, None, None), True
+        return (None, None, None, None), True
     
     # Not a special command
     return None, False
@@ -89,7 +89,7 @@ def handle_query(connection, query):
         query (str): SQL query to execute
         
     Returns:
-        tuple: (column_names, results, trace_id)
+        tuple: (column_names, results, trace_id, query_id)
     """
     # Handle special commands
     result, is_special = _handle_special_commands(connection, query)
@@ -101,21 +101,21 @@ def handle_query(connection, query):
         file_path = query[7:].strip().strip('"\'')
         if not os.path.exists(file_path):
             print(f"Error: File not found: {file_path}")
-            return None, None, None
+            return None, None, None, None
             
         print(f"Executing SQL from file: {file_path}")
         
         # Execute file will set new trace_id for each query in the file
         # and connection.trace_id will have the last query's ID
-        column_names, results = connection.execute_file(file_path)
+        column_names, results, query_id = connection.execute_file(file_path)
         
-        return column_names, results, connection.trace_id
+        return column_names, results, connection.trace_id, query_id
     
     # Regular query execution
     # The execute_query method will set a new trace_id before executing the query
-    column_names, results = connection.execute_query(query)
+    column_names, results, query_id = connection.execute_query(query)
     
-    return column_names, results, connection.trace_id
+    return column_names, results, connection.trace_id, query_id
 
 
 def _setup_sigint_handler(connection, progress_tracker=None):
@@ -148,14 +148,14 @@ def _setup_sigint_handler(connection, progress_tracker=None):
 
 
 def _handle_source_file(connection, file_path, handler_func, output_file=None, **kwargs):
-    """Handle execution of SQL from a file.
+    """Execute SQL from a file.
     
     Args:
         connection (DorisConnection): Database connection
         file_path (str): Path to the SQL file
-        handler_func (callable): Function to handle each query
+        handler_func (function): Query handler function to use
         output_file (str, optional): Path to output CSV file
-        **kwargs: Additional arguments to pass to handler_func
+        **kwargs: Additional arguments for the handler function
         
     Returns:
         tuple: The result of the last query execution
@@ -182,14 +182,19 @@ def _handle_source_file(connection, file_path, handler_func, output_file=None, *
             # Display results for each query if output_file is provided
             if output_file and len(result) >= 2 and result[0] and result[1]:
                 # For profile mode, result is (column_names, results, trace_id, runtime)
-                # For progress mode, result is (column_names, results, trace_id, progress_tracker, runtime)
+                # For progress mode, result is (column_names, results, trace_id, query_id, progress_tracker, runtime)
                 column_names, rows = result[0], result[1]
                 trace_id = result[2] if len(result) > 2 else None
+                
+                # Get query_id if it exists (progress mode)
+                query_id = result[3] if len(result) > 3 and not isinstance(result[3], (float, int)) else None
+                
+                # Get runtime (it's the last element for profile mode, or second-to-last for progress mode)
                 runtime = result[-1] if len(result) > 3 else None
                 
                 # First query overwrites, subsequent queries append
                 append_mode = i > 0 if output_file else False 
-                display_results(column_names, rows, trace_id, runtime, output_file, append_csv=append_mode)
+                display_results(column_names, rows, trace_id, query_id, runtime, output_file, append_csv=append_mode)
                 print()  # Add empty line for readability
             
             last_result = result
@@ -220,7 +225,7 @@ def handle_query_with_progress(connection, query, mock_mode=False, output_file=N
         output_file (str, optional): Path to output CSV file
         
     Returns:
-        tuple: (column_names, results, trace_id, progress_tracker, runtime) 
+        tuple: (column_names, results, trace_id, query_id, progress_tracker, runtime) 
               of the last executed statement
     """
     # Import here to avoid circular imports
@@ -229,14 +234,14 @@ def handle_query_with_progress(connection, query, mock_mode=False, output_file=N
     # Handle special commands
     result, is_special = _handle_special_commands(connection, query)
     if is_special:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     
     # Handle SOURCE command (file execution)
     if query.lower().startswith('source '):
         file_path = query[7:].strip().strip('"\'')
         if not os.path.exists(file_path):
             print(f"Error: File not found: {file_path}")
-            return None, None, None, None, None
+            return None, None, None, None, None, None
             
         print(f"Executing SQL from file: {file_path}")
         
@@ -252,7 +257,7 @@ def handle_query_with_progress(connection, query, mock_mode=False, output_file=N
     statements = _split_statements(query)
     if len(statements) > 1:
         # Execute each statement separately
-        last_results = None, None, None, None, None
+        last_results = None, None, None, None, None, None
         had_error = False
         
         for idx, stmt in enumerate(statements):
@@ -273,13 +278,13 @@ def handle_query_with_progress(connection, query, mock_mode=False, output_file=N
                             
                 # Execute the statement
                 results = handle_query_with_progress_single(connection, stmt, mock_mode)
-                column_names, rows, trace_id, progress_tracker, runtime = results
+                column_names, rows, trace_id, query_id, progress_tracker, runtime = results
                 
                 # Display results for each statement
                 if column_names and rows:
                     # First statement overwrites, subsequent statements append
                     append_mode = idx > 0 if output_file else False
-                    display_results(column_names, rows, trace_id, runtime, output_file, append_csv=append_mode)
+                    display_results(column_names, rows, trace_id, query_id, runtime, output_file, append_csv=append_mode)
                     print()  # Add empty line for readability
                 
                 # Remember the last successful results
@@ -322,7 +327,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
         mock_mode (bool): Whether to use mock mode for progress tracking
         
     Returns:
-        tuple: (column_names, results, trace_id, progress_tracker, runtime)
+        tuple: (column_names, results, trace_id, query_id, progress_tracker, runtime)
     """
     # Set up signal handler for Ctrl+C (SIGINT)
     progress_tracker = None
@@ -330,6 +335,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
     
     # Create progress tracker before executing the query
     column_names, results = None, None
+    query_id = None
     runtime = None
     
     try:
@@ -338,7 +344,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
             print("Connection lost. Reconnecting...")
             if not connection.reconnect():
                 print("Failed to reconnect.")
-                return None, None, None, None, None
+                return None, None, None, None, None, None
         
         # Set a new trace_id before executing the query
         connection._set_trace_id()  # Set a new trace_id now
@@ -359,7 +365,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
         
         # Execute query in the same thread
         # For better experience with long-running queries
-        column_names, results = connection.execute_query(query, set_trace_id=False)  # Don't set a new trace_id
+        column_names, results, query_id = connection.execute_query(query, set_trace_id=False)  # Don't set a new trace_id
         
         # Stop tracking progress after query completes
         progress_tracker.stop_tracking()
@@ -377,7 +383,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
                 connection.reconnect()
             except Exception as reconnect_error:
                 print(f"Failed to reconnect: {reconnect_error}")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     finally:
         # Restore original handler
         signal.signal(signal.SIGINT, original_handler)
@@ -389,7 +395,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
                 runtime = progress_tracker.get_total_runtime()
         
     # Return trace_id along with results and runtime
-    return column_names, results, connection.trace_id, progress_tracker, runtime 
+    return column_names, results, connection.trace_id, query_id, progress_tracker, runtime 
 
 
 def handle_query_with_profile(connection, query, output_file=None):
@@ -411,7 +417,7 @@ def handle_query_with_profile(connection, query, output_file=None):
         output_file (str, optional): Path to output CSV file
         
     Returns:
-        tuple: (column_names, results, trace_id, runtime) of the last executed statement
+        tuple: (column_names, results, trace_id, query_id, runtime) of the last executed statement
     """
     # Import here to avoid circular imports
     from doris_cmd.display import display_results
@@ -419,14 +425,14 @@ def handle_query_with_profile(connection, query, output_file=None):
     # Handle special commands
     result, is_special = _handle_special_commands(connection, query)
     if is_special:
-        return None, None, None, None
+        return None, None, None, None, None
     
     # Handle SOURCE command (file execution)
     if query.lower().startswith('source '):
         file_path = query[7:].strip().strip('"\'')
         if not os.path.exists(file_path):
             print(f"Error: File not found: {file_path}")
-            return None, None, None, None
+            return None, None, None, None, None
             
         print(f"Executing SQL from file: {file_path}")
         
@@ -441,7 +447,7 @@ def handle_query_with_profile(connection, query, output_file=None):
     statements = _split_statements(query)
     if len(statements) > 1:
         # Execute each statement separately
-        last_results = None, None, None, None
+        last_results = None, None, None, None, None
         had_error = False
         
         for idx, stmt in enumerate(statements):
@@ -462,13 +468,13 @@ def handle_query_with_profile(connection, query, output_file=None):
                             
                 # Execute the statement
                 results = handle_query_with_profile_single(connection, stmt)
-                column_names, rows, trace_id, runtime = results
+                column_names, rows, trace_id, query_id, runtime = results
                 
                 # Display results for each statement
                 if column_names and rows:
                     # First statement overwrites, subsequent statements append
                     append_mode = idx > 0 if output_file else False
-                    display_results(column_names, rows, trace_id, runtime, output_file, append_csv=append_mode)
+                    display_results(column_names, rows, trace_id, query_id, runtime, output_file, append_csv=append_mode)
                     print()  # Add empty line for readability
                 
                 # Remember the last successful results
@@ -509,13 +515,14 @@ def handle_query_with_profile_single(connection, query):
         connection (DorisConnection): Database connection
         query (str): SQL query to execute
         
-    Returns:trace_id
-        tuple: (column_names, results, query_id, runtime)
+    Returns:
+        tuple: (column_names, results, trace_id, query_id, runtime)
     """
     # Set up signal handler for Ctrl+C (SIGINT)
     original_handler, _ = _setup_sigint_handler(connection)
     
     column_names, results = None, None
+    query_id = None
     runtime = None
     start_time = time.time()
     
@@ -525,7 +532,7 @@ def handle_query_with_profile_single(connection, query):
             print("Connection lost. Reconnecting...")
             if not connection.reconnect():
                 print("Failed to reconnect.")
-                return None, None, None, None
+                return None, None, None, None, None
         
         # Set a new trace_id before executing the query
         connection._set_trace_id()
@@ -534,7 +541,7 @@ def handle_query_with_profile_single(connection, query):
         try:
             # Execute the actual query
             print(f"Executing query and collecting profile...")
-            column_names, results = connection.execute_query(query, set_trace_id=False)
+            column_names, results, query_id = connection.execute_query(query, set_trace_id=False)
             
             # Calculate runtime
             runtime = time.time() - start_time
@@ -542,13 +549,20 @@ def handle_query_with_profile_single(connection, query):
             # Fetch the query profile
             print(f"Query completed in {runtime:.2f}s. Fetching profile...")
             try:
-                # First get the actual query ID using last_query_id()
-                query_id_col, query_id_result = connection.execute_query("SELECT last_query_id()")
+                # If we already have the query_id from execute_query, use it
+                actual_query_id = query_id
                 
-                if query_id_result and len(query_id_result) > 0:
-                    # Get the query ID from the result
-                    actual_query_id = list(query_id_result[0].values())[0]
-                    print(f"Found last query ID: {actual_query_id}")
+                # If we don't have a query_id yet, try to get it
+                if not actual_query_id:
+                    query_id_col, query_id_result, _ = connection.execute_query("SELECT last_query_id()")
+                    
+                    if query_id_result and len(query_id_result) > 0:
+                        # Get the query ID from the result
+                        actual_query_id = list(query_id_result[0].values())[0]
+                        query_id = actual_query_id
+                
+                if actual_query_id:
+                    print(f"Found query ID: {actual_query_id}")
                     
                     # Create profile directory if it doesn't exist
                     profile_dir = "/tmp/.doris_profile"
@@ -557,74 +571,66 @@ def handle_query_with_profile_single(connection, query):
                     # Get the HTTP port
                     http_port = connection.get_http_port()
                     if http_port:
-                        # Get profile from REST API
-                        profile_url = f"http://{connection.host}:{http_port}/rest/v2/manager/query/profile/text/{actual_query_id}"
-                        print(f"Profile URL: {profile_url}")
-                        
-                        # Make HTTP request with authentication if needed
-                        auth = None
-                        if connection.user:
-                            # Always pass auth even if password is empty string
-                            auth = (connection.user, connection.password if connection.password is not None else '')
-                            print(f"Using authentication with user: '{connection.user}', password length: {len(connection.password) if connection.password is not None else 0}")
-                        else:
-                            print("Warning: No authentication credentials available (username is None)")
+                        # Use the HTTP API to fetch the profile
+                        profile_url = f"http://{connection.host}:{http_port}/api/profile"
+                        params = {
+                            "query_id": actual_query_id
+                        }
                         
                         try:
-                            response = requests.get(profile_url, auth=auth, timeout=10)
+                            response = requests.get(profile_url, params=params, timeout=10)
                             
                             if response.status_code == 200:
-                                # Parse response JSON
+                                profile_data = response.json()
+                                
+                                # Save the profile data to a file
+                                profile_file = f"{profile_dir}/{actual_query_id}.json"
+                                with open(profile_file, 'w') as f:
+                                    json.dump(profile_data, f, indent=2)
+                                
+                                print(f"Profile saved to {profile_file}")
+                                
+                                # Also try to get fragments (this is optional)
                                 try:
-                                    response_json = response.json()
-                                    if response_json.get('msg') == 'success':
-                                        # Save profile to file
-                                        profile_data = response_json.get('data', '')
-                                        profile_file = f"{profile_dir}/doris_profile_{actual_query_id}.txt"
-                                        with open(profile_file, 'w') as f:
-                                            f.write(str(profile_data))
-                                        print(f"Profile saved to {profile_file}")
-                                    else:
-                                        print(f"Failed to get profile: API returned msg={response_json.get('msg')}")
-                                except ValueError:
-                                    # Not a JSON response
-                                    print(f"Failed to parse profile response as JSON, saving raw response")
-                                    profile_file = f"{profile_dir}/doris_profile_{actual_query_id}.txt"
-                                    with open(profile_file, 'w') as f:
-                                        f.write(response.text)
-                                    print(f"Raw response saved to {profile_file}")
+                                    fragments_url = f"http://{connection.host}:{http_port}/api/query_detail"
+                                    fragment_params = {
+                                        "query_id": actual_query_id
+                                    }
+                                    fragment_response = requests.get(fragments_url, params=fragment_params, timeout=10)
+                                    
+                                    if fragment_response.status_code == 200:
+                                        fragments_data = fragment_response.json()
+                                        
+                                        # Save the fragments data to a file
+                                        fragments_file = f"{profile_dir}/{actual_query_id}_fragments.json"
+                                        with open(fragments_file, 'w') as f:
+                                            json.dump(fragments_data, f, indent=2)
+                                        
+                                        print(f"Fragment information saved to {fragments_file}")
+                                except Exception as fragment_error:
+                                    print(f"Warning: Failed to fetch fragment information: {fragment_error}")
                             else:
-                                print(f"Failed to get profile: HTTP {response.status_code}")
-                                if response.text:
-                                    print(f"Error response: {response.text}")
-                        except Exception as profile_err:
-                            print(f"Error fetching profile: {profile_err}")
+                                print(f"Warning: Failed to fetch profile: HTTP {response.status_code}")
+                        except Exception as profile_error:
+                            print(f"Warning: Failed to fetch profile: {profile_error}")
                     else:
-                        print("Failed to get HTTP port. Cannot fetch profile.")
+                        print("Warning: HTTP port not available, cannot fetch profile")
                 else:
-                    print("Could not get last query ID. Profile collection skipped.")
-                    
+                    print("Warning: Could not find query ID, profile collection skipped")
             except Exception as e:
-                print(f"Error collecting profile: {e}")
-                # Continue without profile - query was executed successfully
-            
+                print(f"Warning: Failed to collect profile: {e}")
         except Exception as e:
             print(f"Error during query execution: {e}")
-            return None, None, None, None
-            
-    except Exception as e:
-        print(f"Error during query execution: {e}")
-        # Try to reconnect if connection was lost
-        if not connection._check_connection():
-            try:
-                print("Attempting to reconnect...")
-                connection.reconnect()
-            except Exception as reconnect_error:
-                print(f"Failed to reconnect: {reconnect_error}")
-        return None, None, None, None
+            # Try to reconnect if connection was lost
+            if not connection._check_connection():
+                try:
+                    print("Attempting to reconnect...")
+                    connection.reconnect()
+                except Exception:
+                    pass
+            return None, None, None, None, None
     finally:
         # Restore original handler
         signal.signal(signal.SIGINT, original_handler)
         
-    # Return query results, ID and runtime
-    return column_names, results, connection.trace_id, runtime 
+    return column_names, results, trace_id, query_id, runtime 

@@ -202,20 +202,20 @@ class DorisConnection:
             set_trace_id (bool): Whether to set a new trace ID before executing
             
         Returns:
-            tuple: (column_names, results)
+            tuple: (column_names, results, query_id)
         """
         if not self.connection:
             print("Not connected to Apache Doris")
             # Try to reconnect automatically
             if not self.reconnect():
-                return None, None
+                return None, None, None
         
         # Check connection health first
         if not self._check_connection():
             print("Connection lost. Attempting to reconnect...")
             if not self.reconnect():
                 print("Reconnection failed")
-                return None, None
+                return None, None, None
         
         # Set a new query ID before executing the query if requested
         if set_trace_id:
@@ -223,16 +223,31 @@ class DorisConnection:
                 print("Warning: Failed to set trace ID. Query tracking may not work properly.")
         
         cursor = None
+        query_id = None
         try:
             cursor = self.connection.cursor()
             cursor.execute(sql)
             
-            # Get column names
+            # Get column names and results
+            column_names = None
+            results = None
             if cursor.description:
                 column_names = [col[0] for col in cursor.description]
                 results = cursor.fetchall()
-                return column_names, results
-            return None, None
+            
+            # Get the last query ID using the same connection
+            try:
+                # Create a new cursor to ensure we don't interfere with any results
+                id_cursor = self.connection.cursor()
+                id_cursor.execute("SELECT last_query_id()")
+                id_result = id_cursor.fetchone()
+                if id_result and 'last_query_id()' in id_result:
+                    query_id = id_result['last_query_id()']
+                id_cursor.close()
+            except Exception as e:
+                print(f"Failed to get query ID: {e}")
+            
+            return column_names, results, query_id
         except pymysql.Error as e:
             error_msg = f"Query execution failed: {e}"
             print(error_msg)
@@ -242,13 +257,13 @@ class DorisConnection:
                 # These errors typically indicate connection problems
                 self._cleanup_after_error()
             
-            return None, None
+            return None, None, None
         except Exception as e:
             print(f"Unexpected error during query execution: {e}")
             # Check if connection is still alive before cleanup
             if not self._check_connection():
                 self._cleanup_after_error()
-            return None, None
+            return None, None, None
         finally:
             if cursor:
                 try:
@@ -265,11 +280,11 @@ class DorisConnection:
             set_trace_id (bool): Whether to set a new trace ID for each query
             
         Returns:
-            tuple: (column_names, results) of the last query in the file
+            tuple: (column_names, results, query_id) of the last query in the file
         """
         if not self.connection:
             print("Not connected to Apache Doris")
-            return None, None
+            return None, None, None
             
         try:
             with open(file_path, 'r') as f:
@@ -279,16 +294,16 @@ class DorisConnection:
             # In a production environment, a proper SQL parser would be better
             queries = [q.strip() for q in sql.split(';') if q.strip()]
             
-            column_names, results = None, None
+            column_names, results, query_id = None, None, None
             for query in queries:
                 print(f"Executing query: {query}")
                 # Each query gets a new trace ID if set_trace_id is True
-                column_names, results = self.execute_query(query, set_trace_id=set_trace_id)
+                column_names, results, query_id = self.execute_query(query, set_trace_id=set_trace_id)
                 
-            return column_names, results
+            return column_names, results, query_id
         except Exception as e:
             print(f"Failed to execute SQL file: {e}")
-            return None, None
+            return None, None, None
     
     def get_current_database(self):
         """Get the current database name.

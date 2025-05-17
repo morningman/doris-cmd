@@ -116,18 +116,18 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
             # Execute query with progress or profiling
             if profile:
                 from doris_cmd.query_handler import handle_query_with_profile
-                column_names, results, query_id, runtime = handle_query_with_profile(
+                column_names, results, trace_id, query_id, runtime = handle_query_with_profile(
                     connection, execute, output
                 )
             else:
-                column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                column_names, results, trace_id, query_id, progress_tracker, runtime = handle_query_with_progress(
                     connection, execute, mock, output
                 )
             
             # Only display results here for single-statement queries
             # For multi-statement queries, results are already displayed in handler
             if column_names and results and not is_multi_statement:
-                display_results(column_names, results, query_id, runtime, output)
+                display_results(column_names, results, trace_id, query_id, runtime, output)
         except KeyboardInterrupt:
             print("Query cancelled by user.")
         except EOFError:
@@ -145,11 +145,11 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
         try:
             if profile:
                 from doris_cmd.query_handler import handle_query_with_profile
-                column_names, results, query_id, runtime = handle_query_with_profile(
+                column_names, results, trace_id, query_id, runtime = handle_query_with_profile(
                     connection, f"source {file}", output
                 )
             else:
-                column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                column_names, results, trace_id, query_id, progress_tracker, runtime = handle_query_with_progress(
                     connection, f"source {file}", mock, output
                 )
             # Results have already been displayed and exported during processing
@@ -268,11 +268,11 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                 try:
                     if profile:
                         from doris_cmd.query_handler import handle_query_with_profile
-                        column_names, results, query_id, runtime = handle_query_with_profile(
+                        column_names, results, trace_id, query_id, runtime = handle_query_with_profile(
                             connection, query, output
                         )
                     else:
-                        column_names, results, query_id, progress_tracker, runtime = handle_query_with_progress(
+                        column_names, results, trace_id, query_id, progress_tracker, runtime = handle_query_with_progress(
                             connection, query, mock, output
                         )
                     
@@ -296,7 +296,7 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                     # Only display results for single-statement queries
                     # Multi-statement results are already displayed during processing
                     if column_names and results and not is_multi_statement:
-                        display_results(column_names, results, query_id, runtime, output)
+                        display_results(column_names, results, trace_id, query_id, runtime, output)
                 except Exception as e:
                     print(f"Error: {e}")
                     # Try to reconnect to clean up connection state after an error
