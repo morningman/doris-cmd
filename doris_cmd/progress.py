@@ -272,7 +272,7 @@ class ProgressTracker:
         """
         try:
             # New Doris FE HTTP API for query progress
-            url = f"http://{self.host}:{self.port}/rest/v2/manager/query/progres/query/{self.trace_id}"
+            url = f"http://{self.host}:{self.port}/rest/v2/manager/query/statistics/{self.trace_id}"
             
             try:
                 # Setup authentication
@@ -442,4 +442,4 @@ class ProgressTracker:
             if bytes_num < 1024:
                 return f"{bytes_num:.2f} {unit}"
             bytes_num /= 1024
-        return f"{bytes_num:.2f} PB" 
+        return f"{bytes_num:.2f} PB"
