@@ -357,7 +357,7 @@ class ProgressTracker:
         if not self.progress_data:
             # If there's no progress data, at least show runtime
             mock_indicator = "[Mock] " if self.mock_mode else ""
-            runtime_str = f"Runtime: {runtime_ms/1000:.2f}s"
+            runtime_str = f"Elapsed: {runtime_ms/1000:.2f}s"
             progress_str = f"\r{mock_indicator}ID: {self.trace_id} | {runtime_str} | Waiting for progress data..."
             # Clear the entire line, then print new progress information
             # Use a string of spaces long enough to cover the whole line, then return to line start to print new information
@@ -398,7 +398,7 @@ class ProgressTracker:
             cpu_time = cpu_ms
         
         # Always display runtime
-        runtime_str = f"Runtime: {runtime_ms/1000:.2f}s"
+        runtime_str = f"Elapsed: {runtime_ms/1000:.2f}s"
             
         # Format time if available
         time_str = ""
