@@ -184,7 +184,7 @@ def run_benchmark(connection, sql_path, times=1, mock_mode=False, output_file=No
                     if not connection._check_connection():
                         try:
                             print("Attempting to reconnect...")
-                            if not connection.reconnect():
+                            if not connection.reconnect(preserve_state=True):
                                 print("Failed to reconnect")
                                 return False
                             print("Reconnection successful")

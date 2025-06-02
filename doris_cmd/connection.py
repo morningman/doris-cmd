@@ -7,6 +7,7 @@ import uuid
 import pymysql
 import requests
 from pymysql.cursors import DictCursor
+import time
 
 
 class DorisConnection:
@@ -32,6 +33,8 @@ class DorisConnection:
         self.http_port = None
         self.version = None
         self.connection_id = None
+        self._last_known_database = None
+        self._last_known_catalog = None
         
     def connect(self):
         """Establish connection to Apache Doris."""
@@ -88,7 +91,7 @@ class DorisConnection:
             # Check if connection is alive first
             if not self._check_connection():
                 # Try to reconnect
-                if not self.reconnect():
+                if not self.reconnect(preserve_state=True):
                     return False
             
             cursor = self.connection.cursor()
@@ -108,24 +111,21 @@ class DorisConnection:
                     # Ignore errors when closing cursor
                     pass
                     
-    def _check_connection(self):
-        """Check if the connection is still alive.
-        
-        Returns:
-            bool: True if connection is alive, False otherwise
-        """
+    def _check_connection(self, retry_count=3):
+        """Check if the connection is still alive with retry logic"""
         if not self.connection:
             return False
             
-        try:
-            # Try a simple query to check connection
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-            return True
-        except Exception:
-            # Connection is dead
-            return False
+        for attempt in range(retry_count):
+            try:
+                # Use ping() as the most reliable connection check
+                self.connection.ping()
+                return True
+            except Exception as e:
+                if attempt == retry_count - 1:  # Last attempt
+                    return False
+                time.sleep(0.1)  # Short delay between retries
+        return False
             
     def _cleanup_after_error(self):
         """Clean up connection state after an error occurs."""
@@ -141,7 +141,7 @@ class DorisConnection:
                 self.connection = None
                 
                 # Try to reconnect immediately
-                self.reconnect()
+                self.reconnect(preserve_state=True)
         except Exception:
             # If cleanup fails, at least make sure connection is None
             self.connection = None
@@ -211,13 +211,13 @@ class DorisConnection:
         if not self.connection:
             print("Not connected to Apache Doris")
             # Try to reconnect automatically
-            if not self.reconnect():
+            if not self.reconnect(preserve_state=True):
                 return None, None, None
         
         # Check connection health first
         if not self._check_connection():
             print("Connection lost. Attempting to reconnect...")
-            if not self.reconnect():
+            if not self.reconnect(preserve_state=True):
                 print("Reconnection failed")
                 return None, None, None
         
@@ -256,7 +256,7 @@ class DorisConnection:
             error_msg = f"Query execution failed: {e}"
             print(error_msg)
             
-            # Only try to clean up connection state if it appears to be a connection issue
+            # Check what type of error this is
             if isinstance(e, (pymysql.OperationalError, pymysql.InterfaceError)):
                 # These errors typically indicate connection problems
                 self._cleanup_after_error()
@@ -264,8 +264,15 @@ class DorisConnection:
             return None, None, None
         except Exception as e:
             print(f"Unexpected error during query execution: {e}")
+            
+            # Special handling for KeyboardInterrupt
+            if isinstance(e, KeyboardInterrupt):
+                # Don't check connection state immediately after KeyboardInterrupt
+                # The connection might be in an unstable state due to query cancellation
+                return None, None, None
+            
             # Check if connection is still alive before cleanup
-            if not self._check_connection():
+            if not self._check_connection(retry_count=1):
                 self._cleanup_after_error()
             return None, None, None
         finally:
@@ -318,18 +325,32 @@ class DorisConnection:
         if not self.connection:
             return None
             
-        # Set a new query ID for this operation
-        self._set_trace_id()
-        
-        cursor = self.connection.cursor()
+        # Check if connection is still alive before proceeding
+        if not self._check_connection():
+            return None
+            
+        cursor = None
         try:
+            # Only set trace_id if connection is alive and healthy
+            if self.connection:
+                self._set_trace_id()
+            
+            cursor = self.connection.cursor()
             cursor.execute("SELECT DATABASE()")
             result = cursor.fetchone()
-            return result['DATABASE()'] if result else None
-        except Exception:
+            db_name = result['DATABASE()'] if result else None
+            # Cache the last known database
+            if db_name:
+                self._last_known_database = db_name
+            return db_name
+        except Exception as e:
             return None
         finally:
-            cursor.close()
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
     
     def get_current_catalog(self):
         """Get the current catalog name.
@@ -340,11 +361,17 @@ class DorisConnection:
         if not self.connection:
             return None
             
-        # Set a new query ID for this operation
-        self._set_trace_id()
-        
-        cursor = self.connection.cursor()
+        # Check if connection is still alive before proceeding
+        if not self._check_connection():
+            return None
+            
+        cursor = None
         try:
+            # Only set trace_id if connection is alive and healthy
+            if self.connection:
+                self._set_trace_id()
+            
+            cursor = self.connection.cursor()
             cursor.execute("SHOW CATALOGS")
             results = cursor.fetchall()
             
@@ -352,15 +379,22 @@ class DorisConnection:
             for row in results:
                 if 'IsCurrent' in row and row['IsCurrent'].lower() == 'yes':
                     if 'CatalogName' in row:
-                        return row['CatalogName']
+                        catalog_name = row['CatalogName']
+                        # Cache the last known catalog
+                        self._last_known_catalog = catalog_name
+                        return catalog_name
             
             # If we got here, we didn't find a current catalog
             return "internal"  # Default to internal catalog if not found
         except Exception as e:
-            # If the command fails (old version of Doris), default to internal
+            # If the command fails (old version of Doris or connection issue), default to internal
             return "internal"
         finally:
-            cursor.close()
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def get_current_connection_id(self):
         """Get the current connection ID.
@@ -421,39 +455,18 @@ class DorisConnection:
         finally:
             cursor.close()
     
-    def cancel_query(self, http_port=None):
-        """Cancel the current running query using KILL QUERY command.
-        
-        Args:
-            http_port (int, optional): Not used anymore, kept for backward compatibility.
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
+    def cancel_query(self):
+        """Cancel the current running query"""
         if not self.connection_id:
-            print("Cannot cancel query: Connection ID not available")
             return False
-            
-        # We need a separate connection to kill the query
+        
         try:
-            kill_connection = pymysql.connect(
-                host=self.host,
-                port=self.port,
-                user=self.user,
-                password=self.password,
-                charset='utf8mb4',
-                cursorclass=DictCursor
-            )
-            
-            cursor = kill_connection.cursor()
-            cursor.execute(f"KILL QUERY {self.connection_id}")
-            cursor.close()
-            kill_connection.close()
-            
-            print(f"Query on connection {self.connection_id} cancelled")
-            return True
+            # Create a new connection to send KILL QUERY
+            with self._create_connection() as kill_conn:
+                with kill_conn.cursor() as cursor:
+                    cursor.execute(f"KILL QUERY {self.connection_id}")
+                    return True
         except Exception as e:
-            print(f"Failed to cancel query by connection id '{self.connection_id}': {e}")
             return False
             
     def reset_trace_id(self):
@@ -467,26 +480,89 @@ class DorisConnection:
             print("Connection closed")
             self.connection = None
     
-    def reconnect(self):
-        """Close the current connection and establish a new one.
+    def reconnect(self, preserve_state=True):
+        """Reconnect to the database"""
+        old_catalog = None
+        old_database = None
         
-        This is useful for recovering from connection errors or broken pipe errors.
+        # Use saved state from signal handler if available
+        if preserve_state and hasattr(self, '_saved_state') and self._saved_state:
+            old_catalog = self._saved_state.get('catalog')
+            old_database = self._saved_state.get('database')
+        elif preserve_state:
+            # Fallback: try to get current state if connection is still alive
+            try:
+                if self.connection and self._check_connection():
+                    old_catalog = self.get_current_catalog()
+                    old_database = self.get_current_database()
+            except Exception:
+                # If we can't get current state, just ignore it
+                pass
         
-        Returns:
-            bool: True if reconnection was successful, False otherwise
-        """
-        # Close existing connection if it exists
+        try:
+            self._close_connection()
+            self._establish_connection()
+            
+            # Restore previous state if requested and we have it
+            if preserve_state and old_catalog and old_catalog != 'internal':
+                try:
+                    print(f"[INFO] Restoring catalog: {old_catalog}")
+                    self.switch_catalog(old_catalog)
+                    if old_database:
+                        print(f"[INFO] Restoring database: {old_database}")
+                        self.use_database(old_database)
+                except Exception as e:
+                    print(f"[WARN] Could not restore state - catalog: {old_catalog}, database: {old_database}: {e}")
+            
+            # Clear saved state after use
+            if hasattr(self, '_saved_state'):
+                delattr(self, '_saved_state')
+            
+            return True
+        except Exception as e:
+            print(f"[ERROR] Reconnection failed: {e}")
+            return False
+    
+    def _create_connection(self):
+        """Create a new PyMySQL connection"""
+        return pymysql.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            database=self.database,
+            charset='utf8mb4',
+            cursorclass=DictCursor
+        )
+    
+    def _set_connection_id(self):
+        """Set the connection ID for the current connection"""
+        if self.connection:
+            self._get_connection_id()
+    
+    def _close_connection(self):
+        """Close the current connection"""
         if self.connection:
             try:
                 self.connection.close()
             except Exception:
-                # Ignore errors while closing a possibly broken connection
-                pass
-            self.connection = None
-            self.connection_id = None
-        
-        # Try to establish a new connection
-        return self.connect()
+                pass  # Ignore errors when closing
+            finally:
+                self.connection = None
+                self.connection_id = None
+                if hasattr(self, '_connection_needs_reset'):
+                    delattr(self, '_connection_needs_reset')
+    
+    def _establish_connection(self):
+        """Establish a new connection and set up basic state"""
+        self.connection = self._create_connection()
+        if self.connection:
+            self._set_connection_id()
+            # Get version and HTTP port
+            self.version = self._get_doris_version()
+            self.http_port = self._get_http_port()
+            return True
+        return False
     
     def _get_doris_version(self):
         """Get Apache Doris version.

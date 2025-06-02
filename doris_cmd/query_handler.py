@@ -28,6 +28,9 @@ def _handle_special_commands(connection, query):
     # Handle USE command to change database
     if query.lower().startswith('use '):
         db_name = query[4:].strip()
+        # Remove trailing semicolon if present
+        if db_name.endswith(';'):
+            db_name = db_name[:-1].strip()
         if connection.use_database(db_name):
             print(f"Database changed to {db_name}")
         return (None, None, None, None), True
@@ -35,6 +38,9 @@ def _handle_special_commands(connection, query):
     # Handle SWITCH command to change catalog
     if query.lower().startswith('switch '):
         catalog_name = query[7:].strip()
+        # Remove trailing semicolon if present
+        if catalog_name.endswith(';'):
+            catalog_name = catalog_name[:-1].strip()
         if connection.switch_catalog(catalog_name):
             print(f"Catalog changed to {catalog_name}")
         return (None, None, None, None), True
@@ -118,35 +124,6 @@ def handle_query(connection, query):
     return column_names, results, connection.trace_id, query_id
 
 
-def _setup_sigint_handler(connection, progress_tracker=None):
-    """Set up a signal handler for SIGINT (Ctrl+C).
-    
-    Args:
-        connection (DorisConnection): Database connection
-        progress_tracker (ProgressTracker, optional): Progress tracker to stop
-        
-    Returns:
-        tuple: (original_handler, new_handler_function)
-    """
-    original_handler = signal.getsignal(signal.SIGINT)
-    
-    def sigint_handler(sig, frame):
-        # Restore original handler
-        signal.signal(signal.SIGINT, original_handler)
-        # Stop progress tracking if active
-        if progress_tracker and hasattr(progress_tracker, 'tracking') and progress_tracker.tracking:
-            progress_tracker.stop_tracking()
-        # Cancel query
-        connection.cancel_query()
-        # Raise KeyboardInterrupt to be caught by outer try/except
-        raise KeyboardInterrupt()
-    
-    # Set custom handler
-    signal.signal(signal.SIGINT, sigint_handler)
-    
-    return original_handler, sigint_handler
-
-
 def _handle_source_file(connection, file_path, handler_func, output_file=None, **kwargs):
     """Execute SQL from a file.
     
@@ -163,7 +140,17 @@ def _handle_source_file(connection, file_path, handler_func, output_file=None, *
     from doris_cmd.display import display_results
     
     # Set up signal handler for Ctrl+C (SIGINT)
-    original_handler, _ = _setup_sigint_handler(connection)
+    original_handler = signal.getsignal(signal.SIGINT)
+    
+    def sigint_handler(sig, frame):
+        # Restore original handler
+        signal.signal(signal.SIGINT, original_handler)
+        # Cancel query
+        connection.cancel_query()
+        # Raise KeyboardInterrupt to be caught by outer try/except
+        raise KeyboardInterrupt()
+    
+    signal.signal(signal.SIGINT, sigint_handler)
     
     try:
         # Read the file content
@@ -272,7 +259,7 @@ def handle_query_with_progress(connection, query, mock_mode=False, output_file=N
                     # Ping or reconnect to ensure clean connection state
                     if not connection._check_connection():
                         print("Connection lost. Reconnecting...")
-                        if not connection.reconnect():
+                        if not connection.reconnect(preserve_state=True):
                             print("Failed to reconnect. Skipping remaining statements.")
                             break
                             
@@ -298,7 +285,7 @@ def handle_query_with_progress(connection, query, mock_mode=False, output_file=N
                 # Try to reconnect to clean up the connection state
                 try:
                     print("Attempting to reconnect...")
-                    if connection.reconnect():
+                    if connection.reconnect(preserve_state=True):
                         print("Reconnection successful.")
                     else:
                         print("Reconnection failed. Skipping remaining statements.")
@@ -329,20 +316,18 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
     Returns:
         tuple: (column_names, results, trace_id, query_id, progress_tracker, runtime)
     """
-    # Set up signal handler for Ctrl+C (SIGINT)
-    progress_tracker = None
-    original_handler, _ = _setup_sigint_handler(connection, progress_tracker)
-    
-    # Create progress tracker before executing the query
+    # Create progress tracker and set up signal handler after creating it
     column_names, results = None, None
     query_id = None
     runtime = None
+    progress_tracker = None
+    original_handler = signal.getsignal(signal.SIGINT)
     
     try:
         # Make sure connection is alive
         if not connection._check_connection():
             print("Connection lost. Reconnecting...")
-            if not connection.reconnect():
+            if not connection.reconnect(preserve_state=True):
                 print("Failed to reconnect.")
                 return None, None, None, None, None, None
         
@@ -350,7 +335,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
         connection._set_trace_id()  # Set a new trace_id now
         trace_id = connection.trace_id  # Get the trace_id
         
-        # Create and start the progress tracker with the trace_id already set
+        # Create the progress tracker with the trace_id already set
         progress_tracker = ProgressTracker(
             host=connection.host,
             connection=connection,
@@ -359,6 +344,51 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
             auth_user=connection.user,
             auth_password=connection.password
         )
+        
+        # NOW set up signal handler with the actual progress tracker
+        def sigint_handler(sig, frame):
+            print("\n[INFO] Query interrupted (Ctrl+C)")
+            # Restore original handler
+            signal.signal(signal.SIGINT, original_handler)
+            
+            # Save current state BEFORE stopping progress and canceling query
+            saved_state = {'catalog': None, 'database': None}
+            try:
+                # Try to get current state while connection might still be alive
+                saved_state['catalog'] = connection.get_current_catalog()
+                saved_state['database'] = connection.get_current_database()
+            except Exception:
+                # If we can't get state, that's okay - we'll use defaults
+                pass
+            
+            # Stop progress tracking if active
+            if progress_tracker and hasattr(progress_tracker, 'tracking') and progress_tracker.tracking:
+                progress_tracker.stop_tracking()
+            # Cancel query (this will work even if connection becomes dead)
+            connection.cancel_query()
+            # Mark connection as needing reset due to PyMySQL behavior on interruption
+            connection._connection_needs_reset = True
+            # Save the state for reconnection
+            connection._saved_state = saved_state
+            # Raise KeyboardInterrupt to be caught by outer try/except
+            raise KeyboardInterrupt()
+        
+        def sigquit_handler(sig, frame):
+            print("\n[INFO] Soft query cancellation (Ctrl+\\) - preserving connection")
+            # Stop progress tracking if active
+            if progress_tracker and hasattr(progress_tracker, 'tracking') and progress_tracker.tracking:
+                progress_tracker.stop_tracking()
+            # Cancel query only - don't trigger KeyboardInterrupt
+            success = connection.cancel_query()
+            if success:
+                print("[INFO] Query cancelled successfully. Connection preserved.")
+            else:
+                print("[WARN] Query cancellation may have failed.")
+            # Don't raise any exception - just return to let query complete normally
+        
+        # Set up both signal handlers
+        signal.signal(signal.SIGINT, sigint_handler)   # Ctrl+C - full interruption
+        signal.signal(signal.SIGQUIT, sigquit_handler) # Ctrl+\ - soft cancellation
         
         # Start tracking progress before executing the query
         progress_tracker.start_tracking()
@@ -380,7 +410,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
         if not connection._check_connection():
             try:
                 print("Attempting to reconnect...")
-                connection.reconnect()
+                connection.reconnect(preserve_state=True)
             except Exception as reconnect_error:
                 print(f"Failed to reconnect: {reconnect_error}")
         return None, None, None, None, None, None
@@ -395,7 +425,7 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
                 runtime = progress_tracker.get_total_runtime()
         
     # Return trace_id along with results and runtime
-    return column_names, results, connection.trace_id, query_id, progress_tracker, runtime 
+    return column_names, results, connection.trace_id, query_id, progress_tracker, runtime
 
 
 def handle_query_with_profile(connection, query, output_file=None):
@@ -462,7 +492,7 @@ def handle_query_with_profile(connection, query, output_file=None):
                     # Ping or reconnect to ensure clean connection state
                     if not connection._check_connection():
                         print("Connection lost. Reconnecting...")
-                        if not connection.reconnect():
+                        if not connection.reconnect(preserve_state=True):
                             print("Failed to reconnect. Skipping remaining statements.")
                             break
                             
@@ -488,7 +518,7 @@ def handle_query_with_profile(connection, query, output_file=None):
                 # Try to reconnect to clean up the connection state
                 try:
                     print("Attempting to reconnect...")
-                    if connection.reconnect():
+                    if connection.reconnect(preserve_state=True):
                         print("Reconnection successful.")
                     else:
                         print("Reconnection failed. Skipping remaining statements.")
@@ -519,7 +549,33 @@ def handle_query_with_profile_single(connection, query):
         tuple: (column_names, results, trace_id, query_id, runtime)
     """
     # Set up signal handler for Ctrl+C (SIGINT)
-    original_handler, _ = _setup_sigint_handler(connection)
+    original_handler = signal.getsignal(signal.SIGINT)
+    
+    def sigint_handler(sig, frame):
+        print("\n[INFO] Query interrupted (Ctrl+C)")
+        # Restore original handler
+        signal.signal(signal.SIGINT, original_handler)
+        
+        # Save current state BEFORE canceling query
+        saved_state = {'catalog': None, 'database': None}
+        try:
+            # Try to get current state while connection might still be alive
+            saved_state['catalog'] = connection.get_current_catalog()
+            saved_state['database'] = connection.get_current_database()
+        except Exception:
+            # If we can't get state, that's okay - we'll use defaults
+            pass
+        
+        # Cancel query
+        connection.cancel_query()
+        # Mark connection as needing reset due to PyMySQL behavior on interruption
+        connection._connection_needs_reset = True
+        # Save the state for reconnection
+        connection._saved_state = saved_state
+        # Raise KeyboardInterrupt to be caught by outer try/except
+        raise KeyboardInterrupt()
+    
+    signal.signal(signal.SIGINT, sigint_handler)
     
     column_names, results = None, None
     query_id = None
@@ -530,7 +586,7 @@ def handle_query_with_profile_single(connection, query):
         # Make sure connection is alive
         if not connection._check_connection():
             print("Connection lost. Reconnecting...")
-            if not connection.reconnect():
+            if not connection.reconnect(preserve_state=True):
                 print("Failed to reconnect.")
                 return None, None, None, None, None
         
@@ -644,9 +700,9 @@ def handle_query_with_profile_single(connection, query):
             if not connection._check_connection():
                 try:
                     print("Attempting to reconnect...")
-                    connection.reconnect()
-                except Exception:
-                    pass
+                    connection.reconnect(preserve_state=True)
+                except Exception as reconnect_error:
+                    print(f"Failed to reconnect: {reconnect_error}")
             return None, None, None, None, None
     finally:
         # Restore original handler

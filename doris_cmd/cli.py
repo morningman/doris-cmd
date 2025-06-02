@@ -189,6 +189,10 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
     print(f"Type 'help' or '\\h' for help, '\\q' to quit.")
     print(f"Press Ctrl+D to cancel any running query and exit")
     print(f"Use semicolon (;) followed by Enter to execute a query")
+    print("\n💡 Query Cancellation Options:")
+    print("   • Ctrl+C  : Full interruption (reconnects, preserves state)")
+    print("   • Ctrl+\\  : Soft cancellation (preserves connection)")
+    print()
     
     if profile:
         print(f"Profile mode is enabled. Profiles will be saved to /tmp/.doris_profile/")
@@ -198,9 +202,17 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
         while True:
             try:
                 # Get current database and catalog for prompt
-                current_db = connection.get_current_database() or "(none)"
-                current_catalog = connection.get_current_catalog() or "internal"
-                current_connection_id = connection.get_current_connection_id() or "(none)"
+                # Since KILL QUERY doesn't damage the connection, this should work normally
+                try:
+                    current_db = connection.get_current_database() or "(none)"
+                    current_catalog = connection.get_current_catalog() or "internal"
+                    current_connection_id = connection.get_current_connection_id() or "(none)"
+                except Exception as e:
+                    # If we can't get the current info, use defaults but also print warning
+                    print(f"Warning: Failed to get connection info: {e}")
+                    current_db = "(unknown)"
+                    current_catalog = "internal"
+                    current_connection_id = "(none)"
                 
                 # Display prompt with catalog and database name
                 prompt_text = f"doris-cmd [{current_catalog}][{current_db}]({current_connection_id})> "
@@ -303,7 +315,7 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                     # Try to reconnect to clean up connection state after an error
                     try:
                         print("Attempting to reconnect to clean up connection state...")
-                        success = connection.reconnect()
+                        success = connection.reconnect(preserve_state=True)
                         if success:
                             print("Reconnection successful.")
                         else:
@@ -314,7 +326,21 @@ def main(config, host, port, user, password, database, execute, file, benchmark,
                 
             except KeyboardInterrupt:
                 # Handle Ctrl+C
-                print("\nQuery cancelled")
+                print("\n[INFO] Query cancelled by user")
+                
+                # Check if connection needs reset (from SIGINT handler)
+                if hasattr(connection, '_connection_needs_reset') and connection._connection_needs_reset:
+                    print("[INFO] Reconnecting due to connection interruption...")
+                    try:
+                        if connection.reconnect(preserve_state=True):
+                            current_db = connection.get_current_database() or "(none)"
+                            current_catalog = connection.get_current_catalog() or "internal"
+                            print(f"[INFO] Reconnected successfully. Current: {current_catalog}.{current_db}")
+                            connection._connection_needs_reset = False
+                        else:
+                            print("[ERROR] Reconnection failed!")
+                    except Exception as e:
+                        print(f"[ERROR] Reconnection failed: {e}")
                 continue
             except EOFError:
                 # Handle Ctrl+D (EOF)
