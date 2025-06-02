@@ -171,7 +171,7 @@ class ProgressTracker:
                     self.ever_received_data = True
                     self.last_error = None
                 else:
-                    # If unable to get progress, retain previous data but add error flag
+                    # If unable to get progress, retain previous data but don't add error info
                     if not self.ever_received_data:
                         # If we've never received data, set default values
                         self.progress_data = {
@@ -179,42 +179,39 @@ class ProgressTracker:
                             'scanned_bytes': 'N/A',
                             'cpu_ms': 'N/A',
                             'memory_bytes': 'N/A',
-                            'state': 'UNKNOWN'
+                            'state': 'N/A'
                         }
                     
                     # Always add current runtime even when progress info retrieval fails
                     if self.start_time:
                         runtime_ms = int((time.time() - self.start_time) * 1000)
                         self.progress_data['runtime_ms'] = runtime_ms
-                    
-                    # Add error information if available
-                    if self.last_error:
-                        self.progress_data['error'] = self.last_error
                         
                 # Display the progress (if not in silent mode)
                 if not self.silent_mode:
                     self._display_progress()
             except Exception as e:
-                # Only print errors occasionally to avoid cluttering the terminal
-                if not self.silent_mode:
-                    current_time = time.time()
-                    if current_time - self.last_print_time > 5.0:
-                        print(f"\rProgress tracking error: {e}", end="")
-                        self.last_print_time = current_time
-                        self.last_error = str(e)
-                        
-                        # Always add current runtime to progress data even when exceptions occur
-                        if self.start_time and self.progress_data:
-                            runtime_ms = int((time.time() - self.start_time) * 1000)
-                            self.progress_data['runtime_ms'] = runtime_ms
-                            self._display_progress()
-                else:
-                    # In silent mode, just record the error but don't print anything
-                    self.last_error = str(e)
-                    if self.start_time and self.progress_data:
+                # Store error but don't print it, just update runtime if possible
+                self.last_error = str(e)
+                if self.start_time and self.progress_data:
+                    runtime_ms = int((time.time() - self.start_time) * 1000)
+                    self.progress_data['runtime_ms'] = runtime_ms
+                    # Display progress with existing data (if not in silent mode)
+                    if not self.silent_mode:
+                        self._display_progress()
+                elif not self.silent_mode and not self.ever_received_data:
+                    # If no previous data exists, show N/A values
+                    self.progress_data = {
+                        'scanned_rows': 'N/A',
+                        'scanned_bytes': 'N/A',
+                        'cpu_ms': 'N/A',
+                        'memory_bytes': 'N/A',
+                        'state': 'N/A'
+                    }
+                    if self.start_time:
                         runtime_ms = int((time.time() - self.start_time) * 1000)
                         self.progress_data['runtime_ms'] = runtime_ms
-                
+                    self._display_progress()
             # Sleep for 1 second between progress checks
             time.sleep(1.0)
             
@@ -377,7 +374,6 @@ class ProgressTracker:
         memory_bytes = self.progress_data.get('memory_bytes', 'N/A')
         # Use existing runtime if available, otherwise use calculated value
         runtime_ms = self.progress_data.get('runtime_ms', runtime_ms)
-        error = self.progress_data.get('error')
         
         # Format rows with commas if it's a number
         formatted_rows = scanned_rows
@@ -412,16 +408,8 @@ class ProgressTracker:
         # Indicate if using mock data
         mock_indicator = "[Mock] " if self.mock_mode else ""
         
-        # Add error information if available
-        error_str = ""
-        if error:
-            # Truncate error message if too long
-            if len(error) > 50:
-                error = error[:47] + "..."
-            error_str = f" | Error: {error}"
-        
         # Display progress information with trace_id and new metrics
-        progress_str = f"{mock_indicator}State: {state} | Trace ID: {self.trace_id} | {runtime_str} | ScannedRows: {formatted_rows} | ScannedBytes: {readable_bytes} | CPU: {cpu_time} | Mem: {readable_memory}{time_str}{error_str}"
+        progress_str = f"{mock_indicator}State: {state} | Trace ID: {self.trace_id} | {runtime_str} | ScannedRows: {formatted_rows} | ScannedBytes: {readable_bytes} | CPU: {cpu_time} | Mem: {readable_memory}{time_str}"
         
         # Clear the entire line, then print new progress information
         # Use a string of spaces long enough to cover the whole line, then return to line start to print new information
