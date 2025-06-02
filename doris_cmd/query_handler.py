@@ -352,14 +352,8 @@ def handle_query_with_progress_single(connection, query, mock_mode=False):
             signal.signal(signal.SIGINT, original_handler)
             
             # Save current state BEFORE stopping progress and canceling query
-            saved_state = {'catalog': None, 'database': None}
-            try:
-                # Try to get current state while connection might still be alive
-                saved_state['catalog'] = connection.get_current_catalog()
-                saved_state['database'] = connection.get_current_database()
-            except Exception:
-                # If we can't get state, that's okay - we'll use defaults
-                pass
+            # Use the new persistent state method that handles connection instability
+            saved_state = connection.get_persistent_state()
             
             # Stop progress tracking if active
             if progress_tracker and hasattr(progress_tracker, 'tracking') and progress_tracker.tracking:
@@ -557,14 +551,8 @@ def handle_query_with_profile_single(connection, query):
         signal.signal(signal.SIGINT, original_handler)
         
         # Save current state BEFORE canceling query
-        saved_state = {'catalog': None, 'database': None}
-        try:
-            # Try to get current state while connection might still be alive
-            saved_state['catalog'] = connection.get_current_catalog()
-            saved_state['database'] = connection.get_current_database()
-        except Exception:
-            # If we can't get state, that's okay - we'll use defaults
-            pass
+        # Use the new persistent state method that handles connection instability
+        saved_state = connection.get_persistent_state()
         
         # Cancel query
         connection.cancel_query()

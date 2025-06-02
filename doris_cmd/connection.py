@@ -95,11 +95,15 @@ class DorisConnection:
                     return False
             
             cursor = self.connection.cursor()
+            
             # Set the trace ID using session_context
-            cursor.execute("SET session_context = 'trace_id:{}'".format(self.trace_id))
+            session_sql = "SET session_context = 'trace_id:{}'".format(self.trace_id)
+            cursor.execute(session_sql)
+            
             return True
         except Exception as e:
             print("Failed to set trace ID: {}".format(e))
+            
             # Try to clean up the connection and reconnect
             self._cleanup_after_error()
             return False
@@ -316,35 +320,42 @@ class DorisConnection:
             print(f"Failed to execute SQL file: {e}")
             return None, None, None
     
-    def get_current_database(self):
+    def get_current_database(self, silent_on_error=False):
         """Get the current database name.
+        
+        Args:
+            silent_on_error (bool): If True, don't print error messages
         
         Returns:
             str: Current database name or None
         """
         if not self.connection:
-            return None
+            # Return cached value if connection is down
+            return getattr(self, '_last_known_database', None)
             
         # Check if connection is still alive before proceeding
         if not self._check_connection():
-            return None
+            # Return cached value if connection check fails
+            return getattr(self, '_last_known_database', None)
             
         cursor = None
         try:
-            # Only set trace_id if connection is alive and healthy
-            if self.connection:
-                self._set_trace_id()
-            
             cursor = self.connection.cursor()
             cursor.execute("SELECT DATABASE()")
             result = cursor.fetchone()
+            
             db_name = result['DATABASE()'] if result else None
+            
             # Cache the last known database
             if db_name:
                 self._last_known_database = db_name
             return db_name
         except Exception as e:
-            return None
+            if not silent_on_error:
+                # Only print error if not in silent mode
+                pass
+            # Return cached value if query fails
+            return getattr(self, '_last_known_database', None)
         finally:
             if cursor:
                 try:
@@ -352,25 +363,26 @@ class DorisConnection:
                 except Exception:
                     pass
     
-    def get_current_catalog(self):
+    def get_current_catalog(self, silent_on_error=False):
         """Get the current catalog name.
+        
+        Args:
+            silent_on_error (bool): If True, don't print error messages
         
         Returns:
             str: Current catalog name or None
         """
         if not self.connection:
-            return None
+            # Return cached value if connection is down
+            return getattr(self, '_last_known_catalog', 'internal')
             
         # Check if connection is still alive before proceeding
         if not self._check_connection():
-            return None
+            # Return cached value if connection check fails
+            return getattr(self, '_last_known_catalog', 'internal')
             
         cursor = None
         try:
-            # Only set trace_id if connection is alive and healthy
-            if self.connection:
-                self._set_trace_id()
-            
             cursor = self.connection.cursor()
             cursor.execute("SHOW CATALOGS")
             results = cursor.fetchall()
@@ -387,8 +399,11 @@ class DorisConnection:
             # If we got here, we didn't find a current catalog
             return "internal"  # Default to internal catalog if not found
         except Exception as e:
-            # If the command fails (old version of Doris or connection issue), default to internal
-            return "internal"
+            if not silent_on_error:
+                # Only print error if not in silent mode
+                pass
+            # Return cached value if query fails, default to internal
+            return getattr(self, '_last_known_catalog', 'internal')
         finally:
             if cursor:
                 try:
@@ -416,9 +431,6 @@ class DorisConnection:
         if not self.connection:
             return False
             
-        # Set a new query ID for this operation
-        self._set_trace_id()
-        
         cursor = self.connection.cursor()
         try:
             cursor.execute(f"USE {database}")
@@ -442,9 +454,6 @@ class DorisConnection:
         if not self.connection:
             return False
             
-        # Set a new query ID for this operation
-        self._set_trace_id()
-        
         cursor = self.connection.cursor()
         try:
             cursor.execute(f"SWITCH {catalog}")
@@ -490,14 +499,19 @@ class DorisConnection:
             old_catalog = self._saved_state.get('catalog')
             old_database = self._saved_state.get('database')
         elif preserve_state:
-            # Fallback: try to get current state if connection is still alive
+            # Fallback: try to get current state if connection is still alive, or use cached values
             try:
                 if self.connection and self._check_connection():
-                    old_catalog = self.get_current_catalog()
-                    old_database = self.get_current_database()
+                    old_catalog = self.get_current_catalog(silent_on_error=True)
+                    old_database = self.get_current_database(silent_on_error=True)
+                else:
+                    # Connection is dead, use cached values
+                    old_catalog = getattr(self, '_last_known_catalog', None)
+                    old_database = getattr(self, '_last_known_database', None)
             except Exception:
-                # If we can't get current state, just ignore it
-                pass
+                # If we can't get current state, use cached values
+                old_catalog = getattr(self, '_last_known_catalog', None)
+                old_database = getattr(self, '_last_known_database', None)
         
         try:
             self._close_connection()
@@ -507,21 +521,114 @@ class DorisConnection:
             if preserve_state and old_catalog and old_catalog != 'internal':
                 try:
                     print(f"[INFO] Restoring catalog: {old_catalog}")
-                    self.switch_catalog(old_catalog)
-                    if old_database:
-                        print(f"[INFO] Restoring database: {old_database}")
-                        self.use_database(old_database)
+                    
+                    if self.switch_catalog(old_catalog):
+                        # Update cache after successful switch
+                        self._last_known_catalog = old_catalog
+                        
+                        if old_database:
+                            print(f"[INFO] Restoring database: {old_database}")
+                            
+                            if self.use_database(old_database):
+                                # Update cache after successful switch
+                                self._last_known_database = old_database
+                                print(f"[INFO] State successfully restored: {old_catalog}.{old_database}")
+                            else:
+                                # Database restore failed, clear cached database but keep catalog
+                                print(f"[WARN] Database '{old_database}' does not exist in catalog '{old_catalog}', clearing database context")
+                                self._last_known_database = None
+                                
+                                # Try to provide helpful information about available databases
+                                try:
+                                    available_dbs = self.get_available_databases()
+                                    if available_dbs:
+                                        print(f"[INFO] Available databases in catalog '{old_catalog}': {', '.join(available_dbs[:5])}")
+                                        if len(available_dbs) > 5:
+                                            print(f"[INFO] ... and {len(available_dbs) - 5} more databases")
+                                    else:
+                                        print(f"[INFO] No databases found in catalog '{old_catalog}' or unable to retrieve database list")
+                                except Exception:
+                                    # Don't let database listing errors affect reconnection
+                                    pass
+                                    
+                                print(f"[INFO] Partial state restored: {old_catalog}.(none)")
+                    else:
+                        print(f"[WARN] Failed to switch to catalog '{old_catalog}', using default catalog")
+                        self._last_known_catalog = 'internal'
+                        self._last_known_database = None
+                        print(f"[INFO] Using default state: internal.(none)")
+                        
                 except Exception as e:
                     print(f"[WARN] Could not restore state - catalog: {old_catalog}, database: {old_database}: {e}")
+                    # Reset to safe defaults if state restoration fails completely
+                    self._last_known_catalog = 'internal'
+                    self._last_known_database = None
+                    print(f"[INFO] Reset to default state: internal.(none)")
             
-            # Clear saved state after use
+            # Clear saved state after use, but keep cached values for future use
             if hasattr(self, '_saved_state'):
                 delattr(self, '_saved_state')
+            
+            # Update cache with final state after successful reconnection
+            try:
+                final_catalog = self.get_current_catalog(silent_on_error=True)
+                final_database = self.get_current_database(silent_on_error=True)
+                if final_catalog:
+                    self._last_known_catalog = final_catalog
+                if final_database:
+                    self._last_known_database = final_database
+            except Exception:
+                # Don't let cache update errors affect the reconnection result
+                pass
             
             return True
         except Exception as e:
             print(f"[ERROR] Reconnection failed: {e}")
             return False
+    
+    def get_persistent_state(self):
+        """Get the current or last known state for persistence.
+        
+        This method tries to get current state first, but falls back to cached values
+        if the connection is unavailable. This is specifically designed for use in
+        signal handlers where connection may be unstable.
+        
+        Returns:
+            dict: Dictionary with 'catalog' and 'database' keys
+        """
+        state = {'catalog': None, 'database': None}
+        
+        # Get cached values first
+        cached_catalog = getattr(self, '_last_known_catalog', None)
+        cached_database = getattr(self, '_last_known_database', None)
+        
+        try:
+            # Try to get current state if connection is alive
+            if self.connection and self._check_connection():
+                catalog = self.get_current_catalog(silent_on_error=True)
+                database = self.get_current_database(silent_on_error=True)
+                
+                # Check for Doris catalog reset corruption
+                # If live state shows 'internal' but we have a different cached catalog,
+                # it likely means Doris reset the session during query cancellation
+                if (catalog == 'internal' and cached_catalog and cached_catalog != 'internal'):
+                    # Use cached state to preserve user context
+                    state['catalog'] = cached_catalog
+                    state['database'] = cached_database
+                else:
+                    # Live state appears reliable, use it
+                    state['catalog'] = catalog
+                    state['database'] = database
+            else:
+                # Connection is dead, use cached values
+                state['catalog'] = cached_catalog
+                state['database'] = cached_database
+        except Exception as e:
+            # If all fails, use cached values
+            state['catalog'] = cached_catalog
+            state['database'] = cached_database
+        
+        return state
     
     def _create_connection(self):
         """Create a new PyMySQL connection"""
@@ -530,7 +637,7 @@ class DorisConnection:
             port=self.port,
             user=self.user,
             password=self.password,
-            database=self.database,
+            database=None,  # Don't specify database during connection, we'll set it manually later
             charset='utf8mb4',
             cursorclass=DictCursor
         )
@@ -607,6 +714,45 @@ class DorisConnection:
         except Exception as e:
             print(f"Failed to get connection ID: {e}")
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass 
+    
+    def get_available_databases(self):
+        """Get list of available databases in current catalog.
+        
+        Returns:
+            list: List of database names, or empty list if query fails
+        """
+        if not self.connection:
+            return []
+            
+        # Check if connection is still alive before proceeding
+        if not self._check_connection():
+            return []
+            
+        cursor = None
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SHOW DATABASES")
+            results = cursor.fetchall()
+            
+            # Extract database names from results
+            databases = []
+            for row in results:
+                # SHOW DATABASES returns different column names in different Doris versions
+                if 'Database' in row:
+                    databases.append(row['Database'])
+                elif 'DatabaseName' in row:
+                    databases.append(row['DatabaseName'])
+                # Add other potential column names as needed
+                
+            return databases
+        except Exception as e:
+            return []
         finally:
             if cursor:
                 try:
